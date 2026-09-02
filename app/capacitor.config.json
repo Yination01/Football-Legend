@@ -1,0 +1,16 @@
+{
+  "appId": "com.footballlegend.game",
+  "appName": "Football Legend",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": false,
+    "backgroundColor": "#0d1a12"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 1500,
+      "backgroundColor": "#0d1a12",
+      "androidScaleType": "CENTER_CROP"
+    }
+  }
+}
