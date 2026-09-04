@@ -9,7 +9,8 @@
    - Game: `https://yination01.github.io/Football-Legend/game/`
    - Admin console: `https://yination01.github.io/Football-Legend/game/admin/`
 3. **Google OAuth origins** — console.cloud.google.com → Credentials → your OAuth client → *Authorized JavaScript origins* → add `https://yination01.github.io` (only if web sign-in complains).
-4. **Make yourself admin** — sign into the game (web or app) with Google once, then in Supabase SQL Editor:
+4. **Leaderboards SQL** — Supabase SQL Editor → paste ALL of `game/supabase/leaderboard.sql` → Run ("Success. No rows returned"). Without this, Global Rankings shows "loading" forever.
+5. **Make yourself admin** — sign into the game (web or app) with Google once, then in Supabase SQL Editor:
    ```sql
    insert into admins (uid) select uid from profiles where player_id = 'YOUR-FL-ID';
    ```

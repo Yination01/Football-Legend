@@ -2999,6 +2999,54 @@ function giftsScreen() {
     <button class="btn secondary" id="giftback">\u2b05 Main Menu</button>
   </div>`;
 }
+// ============================ LEADERBOARDS (cloud) ============================
+var FL_LB_CACHE = { bal: null, ml: null, at: 0 };
+function leaderboardScreen() {
+  const mode = window._lbMode || "bal";
+  const fresh = Date.now() - FL_LB_CACHE.at < 3 * 60 * 1000;
+  if (window.Cloud && Cloud.enabled() && !fresh) {
+    FL_LB_CACHE.at = Date.now();
+    Promise.all([Cloud.fetchLeaderboard("bal"), Cloud.fetchLeaderboard("ml")]).then(([b, m]) => {
+      FL_LB_CACHE.bal = b; FL_LB_CACHE.ml = m;
+      if (document.querySelector("#lbback")) render(leaderboardScreen);
+    });
+  }
+  setTimeout(() => {
+    const tb = $("#lbbal"); if (tb) tb.onclick = () => { window._lbMode = "bal"; render(leaderboardScreen); };
+    const tm = $("#lbml"); if (tm) tm.onclick = () => { window._lbMode = "ml"; render(leaderboardScreen); };
+    $("#lbback").onclick = () => render(menuScreen);
+  }, 0);
+  const myPid = flPlayerId();
+  const rows = FL_LB_CACHE[mode];
+  let body;
+  if (!window.Cloud || !Cloud.enabled()) body = '<p class="sub">Leaderboards need the online service \u2014 not configured in this build.</p>';
+  else if (rows == null) body = '<p class="sub">\u23f3 Loading global rankings\u2026</p>';
+  else if (!rows.length) body = '<p class="sub">No ranked players yet \u2014 sign in and play to claim the #1 spot!</p>';
+  else if (mode === "bal") {
+    body = rows.map((r, i) => `<div class="kv" ${r.player_id === myPid ? 'style="color:var(--gold)"' : ""}>
+      <span>${i + 1}. ${r.pname} <span class="sub">(${r.pos})</span>${r.player_id === myPid ? " (YOU)" : ""}<br>
+      <span class="sub">${r.name} \u00b7 S${r.season} \u00b7 age ${r.age} \u00b7 ${r.goals} goals / ${r.apps} apps</span></span>
+      <b>\u2b50 ${r.rep} rep \u00b7 Lv ${r.level}</b></div>`).join("");
+  } else {
+    body = rows.map((r, i) => `<div class="kv" ${r.player_id === myPid ? 'style="color:var(--gold)"' : ""}>
+      <span>${i + 1}. ${r.club}${r.player_id === myPid ? " (YOU)" : ""}<br>
+      <span class="sub">${r.name} \u00b7 S${r.season} \u00b7 ${r.squad_n} players</span></span>
+      <b>\ud83c\udfc6 ${r.trophies} \u00b7 ${Math.round(r.budget)}M</b></div>`).join("");
+  }
+  return `<div class="screen">
+    <div class="topbar"><div class="logo"><span class="brand1">GLOBAL</span> <span class="legend">RANKINGS</span></div></div>
+    <div class="viewrow" style="gap:6px;margin-bottom:8px">
+      <button class="btn secondary ${mode === "bal" ? "on" : ""}" id="lbbal" style="flex:1">\u2b50 LEGENDS</button>
+      <button class="btn secondary ${mode === "ml" ? "on" : ""}" id="lbml" style="flex:1">\ud83c\udfc6 CLUBS</button>
+    </div>
+    <div class="panel">
+      <h2>${mode === "bal" ? "\u2b50 Top Legends \u00b7 by reputation" : "\ud83c\udfc6 Top Clubs \u00b7 by trophies"}</h2>
+      ${body}
+      <p class="sub" style="margin-top:8px">Rankings come from cloud saves \u2014 sign in (Settings) and play to appear. Cheated saves never make it here.</p>
+    </div>
+    <button class="btn secondary" id="lbback">\u2b05 Main Menu</button>
+  </div>`;
+}
 // ============================ OWNER PANEL (superuser) ============================
 const FL_OWNER_HASH = 1728818593; // hashSeed("flown:" + ownerKey) — key never stored in code
 function flIsOwner() { return getSet().ownerMode === true; }
@@ -3180,6 +3228,7 @@ function menuScreen() {
     $("#goset").onclick = () => render(settingsScreen);
     $("#gohow").onclick = () => render(howScreen);
     const gg = $("#gogifts"); if (gg) gg.onclick = () => render(giftsScreen);
+    const gl = $("#golb"); if (gl) gl.onclick = () => render(leaderboardScreen);
     const go2 = $("#goowner"); if (go2) go2.onclick = () => render(ownerScreen);
   }, 0);
   const liveGifts = flGiftsLive().length;
@@ -3206,6 +3255,10 @@ function menuScreen() {
     <div class="panel" style="cursor:pointer${liveGifts ? ";border-color:var(--gold)" : ""}" id="gogifts">
       <h2>\ud83c\udf81 Gifts & Events${liveGifts ? ` <span class="badge gold" style="float:right">${liveGifts} LIVE</span>` : ""}</h2>
       <p class="sub">Free players, GP and Legend Coins \u2014 event drops and redeem codes. Everything a gift, nothing pay-to-win.</p>
+    </div>
+    <div class="panel" style="cursor:pointer" id="golb">
+      <h2>\ud83c\udf10 Global Rankings</h2>
+      <p class="sub">Top legends and clubs worldwide \u2014 signed-in players only. Where do you stand?</p>
     </div>
     ${flIsOwner() ? `<div class="panel" style="cursor:pointer;border-color:var(--gold)" id="goowner">
       <h2>\ud83d\udc51 Owner Panel</h2>

@@ -183,11 +183,20 @@ var Cloud = (function () {
       .catch(function () { return null; });
   }
 
+  function fetchLeaderboard(mode) { // "bal" | "ml" — public RPC, works signed-out
+    if (!enabled()) return Promise.resolve(null);
+    return fetch(FL_CLOUD_URL + "/rest/v1/rpc/leaderboard_" + mode, {
+      method: "POST",
+      headers: { apikey: FL_CLOUD_ANON, authorization: "Bearer " + FL_CLOUD_ANON, "content-type": "application/json" },
+      body: JSON.stringify({ lim: 50 }),
+    }).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; });
+  }
+
   function accountEmail() { return signedIn() ? (session.user.email || "Google account") : null; }
 
   return { init: init, enabled: enabled, signedIn: signedIn, signIn: signIn, signOut: signOut,
            push: push, redeemOnline: redeemOnline, fetchEvents: fetchEvents,
-           fetchBroadcast: fetchBroadcast, accountEmail: accountEmail };
+           fetchBroadcast: fetchBroadcast, fetchLeaderboard: fetchLeaderboard, accountEmail: accountEmail };
 })();
 
 // boot: harmless when unconfigured
