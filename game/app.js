@@ -201,7 +201,7 @@ async function flRestoreFromNative() { // boot: localStorage wiped but native co
     }
   } catch (e) {}
 }
-function save() { const v = JSON.stringify(S); localStorage.setItem(SAVE_KEY, v); flMirror(SAVE_KEY, v); }
+function save() { const v = JSON.stringify(S); localStorage.setItem(SAVE_KEY, v); flMirror(SAVE_KEY, v); if (window.Cloud) try { Cloud.push("bal"); } catch (e) {} }
 function load() {
   try { const d = localStorage.getItem(SAVE_KEY); if (d) S = JSON.parse(d); } catch (e) { S = null; }
 }
@@ -2880,9 +2880,18 @@ function flGiftMarkClaimed(id) {
   const c = flGiftClaimed(); if (!c.includes(id)) c.push(id);
   localStorage.setItem("flGiftsClaimed", JSON.stringify(c)); if (window.flMirror) flMirror("flGiftsClaimed", JSON.stringify(c));
 }
+var FL_CLOUD_EVENTS = []; // refreshed from the server when online; [] offline
+var FL_CLOUD_EVENTS_AT = 0;
+function flRefreshCloudEvents(cb) {
+  if (!window.Cloud || !Cloud.enabled()) return;                 // offline: nothing to do, no cb
+  if (Date.now() - FL_CLOUD_EVENTS_AT < 5 * 60 * 1000) return;   // 5-min cache stops re-render loops
+  FL_CLOUD_EVENTS_AT = Date.now();
+  Cloud.fetchEvents().then(ev => { FL_CLOUD_EVENTS = ev || []; if (cb) cb(); }).catch(() => {});
+}
 function flGiftsLive() {
   const now = new Date().toISOString().slice(0, 10);
-  return FL_GIFT_EVENTS.filter(g => now >= g.from && now <= g.to && !flGiftClaimed().includes(g.id));
+  const all = FL_GIFT_EVENTS.concat(FL_CLOUD_EVENTS.filter(c => !FL_GIFT_EVENTS.some(g => g.id === c.id)));
+  return all.filter(g => now >= g.from && now <= g.to && !flGiftClaimed().includes(g.id));
 }
 function flQueueMlGift(g) { // ML applies it on next ML.enter()
   try {
@@ -2900,6 +2909,15 @@ function flApplyGift(g) { // BaL part instantly, ML part queued
   }
   if (g.mlgp || g.mllc || g.pl) flQueueMlGift({ id: g.id, title: g.title, mlgp: g.mlgp, mllc: g.mllc, pl: g.pl });
   flGiftMarkClaimed(g.id);
+  flGiftLog(g);
+}
+function flGiftLog(g) { // rolling history for the Gifts screen (cap 30)
+  try {
+    const h = JSON.parse(localStorage.getItem("flGiftHistory") || "[]");
+    h.unshift({ t: Date.now(), title: g.title || g.note || "Gift", gp: g.gp || 0, lc: g.lc || 0, mlgp: g.mlgp || 0, mllc: g.mllc || 0, pl: g.pl ? g.pl.name + " (" + g.pl.ovr + ")" : null });
+    const v = JSON.stringify(h.slice(0, 30));
+    localStorage.setItem("flGiftHistory", v); if (window.flMirror) flMirror("flGiftHistory", v);
+  } catch (e) {}
 }
 // Redeem codes: TEMPLATE-SERIAL-CHECK, verified offline via hash; single-use per save
 const FL_CODE_SECRET = "flgift-s3cr3t-2026";
@@ -2926,16 +2944,27 @@ function flRedeem(codeRaw) {
   return { ok: true, msg: t.title };
 }
 function giftsScreen() {
+  flRefreshCloudEvents(() => { /* re-render if new events arrived */
+    if (FL_CLOUD_EVENTS.length && document.querySelector("#redeemin")) render(giftsScreen);
+  });
   const live = flGiftsLive();
   setTimeout(() => {
     document.querySelectorAll("[data-claimg]").forEach(b => b.onclick = () => {
-      const g = FL_GIFT_EVENTS.find(x => x.id === b.dataset.claimg);
+      const g = flGiftsLive().find(x => x.id === b.dataset.claimg); // merged: built-in + cloud events
       if (!g) return;
       flApplyGift(g);
       toast("\ud83c\udf81 " + g.title + " claimed!" + (g.pl || g.mlgp || g.mllc ? " ML rewards arrive when you open Master League." : ""));
       render(giftsScreen);
     });
     const rd = $("#redeembtn"); if (rd) rd.onclick = () => {
+      const codeVal = $("#redeemin").value;
+      if (window.Cloud && Cloud.signedIn()) {
+        Cloud.redeemOnline(codeVal).then(rr => {
+          const r2 = rr || flRedeem(codeVal); // null = unknown online -> fall back to built-in codes
+          toast(r2.msg); if (r2.ok) { render(giftsScreen); }
+        });
+        return;
+      }
       const r = flRedeem($("#redeemin").value);
       toast(r.ok ? "\u2705 Redeemed: " + r.msg : "\u274c " + r.msg);
       if (r.ok) { $("#redeemin").value = ""; render(giftsScreen); }
@@ -2956,6 +2985,17 @@ function giftsScreen() {
       <input id="redeemin" placeholder="e.g. WELCOME26-AB12-XXXX" style="width:100%;padding:10px;border-radius:8px;border:1px solid #333;background:#101812;color:#e8e8e8;margin:6px 0" />
       <button class="btn" id="redeembtn">REDEEM \ud83c\udf81</button>
     </div>
+    ${(() => { try {
+      const h = JSON.parse(localStorage.getItem("flGiftHistory") || "[]");
+      if (!h.length) return "";
+      return `<div class="panel"><h2>\ud83d\udcdc Gift History</h2>${h.slice(0, 12).map(x => {
+        const parts = [];
+        if (x.gp) parts.push("+" + x.gp + " GP"); if (x.lc) parts.push("+" + x.lc + " LC");
+        if (x.mlgp) parts.push("+" + x.mlgp + "M ML"); if (x.mllc) parts.push("+" + x.mllc + " ML LC");
+        if (x.pl) parts.push("\u2b50 " + x.pl);
+        return `<div class="kv"><span>${x.title}<br><span class="sub">${new Date(x.t).toLocaleDateString()}</span></span><b class="sub">${parts.join(" \u00b7 ") || "\u2014"}</b></div>`;
+      }).join("")}</div>`;
+    } catch (e) { return ""; } })()}
     <button class="btn secondary" id="giftback">\u2b05 Main Menu</button>
   </div>`;
 }
@@ -2971,6 +3011,7 @@ function ownerScreen() {
     const g2 = $("#owballc"); if (g2) g2.onclick = () => grant(() => { if (S) S.nl += 100; });
     const g3 = $("#owmlgp"); if (g3) g3.onclick = () => { flQueueMlGift({ id: "own:" + Date.now(), title: "Owner grant", mlgp: 50 }); toast("\u2705 Queued \u2014 open ML"); };
     const g4 = $("#owmllc"); if (g4) g4.onclick = () => { flQueueMlGift({ id: "own:" + Date.now(), title: "Owner grant", mllc: 100 }); toast("\u2705 Queued \u2014 open ML"); };
+    const ge = $("#owevents"); if (ge) ge.onclick = () => { FL_CLOUD_EVENTS_AT = 0; flRefreshCloudEvents(() => { toast("\ud83c\udf81 " + FL_CLOUD_EVENTS.length + " cloud event(s) loaded"); render(ownerScreen); }); toast("Refreshing\u2026"); };
     const sp = $("#owspawn"); if (sp) sp.onclick = () => {
       const pos = $("#owpos").value, ovr = Math.max(60, Math.min(94, +($("#owovr").value || 88))), card = $("#owcard").value;
       flQueueMlGift({ id: "own:" + Date.now(), title: "Owner spawn", pl: { pos, ovr, card } });
@@ -3038,6 +3079,11 @@ function ownerScreen() {
     </div>
     <div class="panel"><h2>\ud83e\udde0 Debug</h2>
       <button class="btn secondary" id="owdbg">ENGINE SNAPSHOT (seeds, true odds, state)</button>
+    </div>
+    <div class="panel"><h2>\u2601\ufe0f Cloud</h2>
+      <div class="kv"><span>Status</span><b>${window.Cloud && Cloud.enabled() ? (Cloud.signedIn() ? "\u2705 " + Cloud.accountEmail() : "configured, not signed in") : "not configured"}</b></div>
+      <p class="sub">Full remote management (all players, live events, codes, bans, analytics) lives in the web Admin Console \u2014 open <b>/admin/</b> on the game's web address and sign in with an admin Google account.</p>
+      <button class="btn secondary" id="owevents">\ud83d\udd04 FORCE-REFRESH CLOUD EVENTS</button>
       <textarea id="owdbgout" readonly style="width:100%;height:120px;display:none;margin-top:6px" onclick="this.select()"></textarea>
     </div>
     <button class="btn secondary" id="owoff">\ud83d\udd12 Turn owner mode OFF</button>
@@ -3100,7 +3146,15 @@ if (window.Capacitor) {
 
 
 // ============================ MAIN MENU ============================
+var FL_BROADCAST = null, FL_BROADCAST_AT = 0;
 function menuScreen() {
+  // pull admin broadcast (cached 10 min); re-render banner when it first arrives
+  if (window.Cloud && Cloud.enabled() && Date.now() - FL_BROADCAST_AT > 10 * 60 * 1000) {
+    FL_BROADCAST_AT = Date.now();
+    Cloud.fetchBroadcast().then(msg => {
+      if (msg && msg !== FL_BROADCAST) { FL_BROADCAST = msg; if (document.querySelector("#gobal")) render(menuScreen); }
+    }).catch(() => {});
+  }
   let mlInfo = null;
   try { const m = JSON.parse(localStorage.getItem("footballLegendML_v1")); if (m && !m.sacked) mlInfo = m; } catch (e) {}
   setTimeout(() => {
@@ -3131,6 +3185,7 @@ function menuScreen() {
   const liveGifts = flGiftsLive().length;
   return `<div class="screen">
     <div class="topbar"><div class="logo"><span class="brand1">FOOTBALL</span> <span class="legend">LEGEND</span></div></div>
+    ${FL_BROADCAST ? `<div class="panel" style="border:1px solid #e8c35a;background:#1c180c"><b style="color:#e8c35a">\ud83d\udce2 ANNOUNCEMENT</b><p class="sub" style="margin-top:4px">${FL_BROADCAST.replace(/</g, "&lt;")}</p></div>` : ""}
     <div class="panel center"><h1>\u26bd FOOTBALL LEGEND</h1>
       <p class="sub" style="margin-top:6px">Honest engine. Real odds. No scripts.</p></div>
     <div class="panel" style="cursor:pointer" id="gobal">
@@ -3586,6 +3641,8 @@ function settingsScreen() {
     };
     $("#setback").onclick = () => render(menuScreen);
     let idTaps = 0;
+    const ci = $("#cloudin"); if (ci) ci.onclick = () => Cloud.signIn();
+    const co = $("#cloudout"); if (co) co.onclick = () => { Cloud.signOut(); render(settingsScreen); };
     const idRow = $("#pidrow");
     if (idRow) idRow.onclick = () => {
       idTaps++;
@@ -3607,7 +3664,14 @@ function settingsScreen() {
       </div>
     <div class="panel"><h2>\ud83d\udc64 Account</h2>
       <div class="kv" id="pidrow" style="cursor:pointer"><span>Player ID</span><b>${flPlayerId()}</b></div>
-      <p class="sub">Your permanent ID \u2014 cloud saves and online play will attach to it in a future update.</p>
+      ${window.Cloud && Cloud.enabled() ? (Cloud.signedIn()
+        ? `<div class="kv"><span>\u2601\ufe0f Cloud</span><b style="color:#7fd67f">\u2705 ${Cloud.accountEmail()}</b></div>
+           <p class="sub">Saves sync automatically after matchdays. Sign in on any device to restore.</p>
+           <button class="btn secondary" id="cloudout">SIGN OUT</button>`
+        : `<div class="kv"><span>\u2601\ufe0f Cloud</span><b style="color:#caa">not connected</b></div>
+           <p class="sub">Optional: connect Google to back up your careers online and play across devices. The game works fully offline without it.</p>
+           <button class="btn" id="cloudin">\ud83d\udd11 SIGN IN WITH GOOGLE</button>`)
+        : `<p class="sub">Your permanent ID \u2014 cloud saves attach to it once online services are configured.</p>`}
       <div class="kv"><span>\u2b50 BaL career</span><b>${S ? S.name + " \u00b7 " + lifeApps + " apps \u00b7 " + lifeGoals + " goals" : "\u2014"}</b></div>
       <div class="kv"><span>\ud83c\udfc6 ML club</span><b>${mlS ? (mlS.clubName || "founded") + " \u00b7 " + mlSeasons + " seasons \u00b7 " + mlTrophies + " trophies" : "\u2014"}</b></div>
       <div class="kv"><span>\ud83d\udcbe Backup protection</span><b>${window.Capacitor ? "\u2705 Auto (file + Android)" : "\u26a0\ufe0f Browser \u2014 use backup codes"}</b></div>

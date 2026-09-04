@@ -83,7 +83,7 @@ function mlCardBoost(p, ctx) { // ctx: { attacking, big } — honest, determinis
 }
 
 // ---------- save ----------
-function mlSave() { const v = JSON.stringify(M); localStorage.setItem(ML_KEY, v); if (window.flMirror) window.flMirror(ML_KEY, v); }
+function mlSave() { const v = JSON.stringify(M); localStorage.setItem(ML_KEY, v); if (window.flMirror) window.flMirror(ML_KEY, v); if (window.Cloud) try { Cloud.push("ml"); } catch (e) {} }
 function mlLoad() {
   try { const d = localStorage.getItem(ML_KEY); if (d) M = JSON.parse(d); } catch (e) { M = null; }
   if (M) {
@@ -702,12 +702,47 @@ function mlPacksScreen() {
 
 // ---------- table & news ----------
 function mlTableScreen() {
+  // competitions hub: My League | other galaxy leagues | Champions Trophy panel
+  const worldView = M._worldLg != null && M.galaxy && M._worldLg !== M.leagueIdx;
+  setTimeout(() => {
+    document.querySelectorAll("[data-mlworldlg]").forEach(b => b.onclick = () => { M._worldLg = +b.dataset.mlworldlg; render(mlTableScreen); });
+  }, 0);
+  const worldTabs = M.galaxy ? `<div class="viewrow" style="flex-wrap:wrap;gap:4px;margin-bottom:6px">
+    ${M.galaxy.leagues.map((L, li) => `<button class="btn secondary ${((M._worldLg == null ? M.leagueIdx : M._worldLg) === li) ? "on" : ""}" data-mlworldlg="${li}" style="flex:1 1 30%;font-size:.72rem;padding:6px 4px">${L.name.split(" ")[0]}${li === M.leagueIdx ? " \u2b50" : ""}</button>`).join("")}
+  </div>` : "";
+  if (worldView) {
+    const L = M.galaxy.leagues[M._worldLg];
+    const wt = E.computeTable(L.clubs, L.results || []);
+    return `<div class="screen">${mlTopbar()}
+      <div class="panel"><h2>\ud83c\udf0d ${L.name} \u00b7 Season ${M.season}</h2>
+        ${worldTabs}
+        ${wt.map((r, i) => `<div class="kv"><span>${i + 1}. ${r.name}</span><b>${r.Pts} pts \u00b7 ${r.GF}-${r.GA}</b></div>`).join("")}
+        <p class="sub" style="margin-top:6px">League champions qualify for next season's \ud83c\udf0d Champions Trophy (top-3 leagues send two).</p>
+      </div>
+      ${mlNav()}</div>`;
+  }
   const table = E.computeTable(M.world.clubs, M.results);
+  const ctPanel = (M.ct && M.ct.myG >= 0) ? (() => {
+    const gt = E.ctGroupTable(M.ct, M.ct.myG);
+    const meE = M.ct.groups[M.ct.myG][M.ct.myS];
+    return `<div class="panel">
+      <h2>\ud83c\udf0d Champions Trophy \u00b7 Group ${"ABCD"[M.ct.myG]}</h2>
+      ${M.ct.stage === "group" ? gt.map((r, i) => {
+          const e2 = M.ct.groups[M.ct.myG][r.s]; const c = E.ctClub(M.galaxy, e2);
+          const isMe = e2.league === meE.league && e2.club === meE.club;
+          return `<div class="kv" ${isMe ? 'style="color:var(--gold)"' : ""}><span>${i + 1}. ${c.name}${isMe ? " (YOU)" : ""}</span><b>${r.Pts} pts \u00b7 GD ${r.GD > 0 ? "+" : ""}${r.GD}</b></div>`;
+        }).join("") + `<p class="sub" style="margin-top:6px">Top two advance \u00b7 group matches ${M.ct.gPlayed}/6 played \u00b7 CT nights follow league MDs ${ML_CT_NIGHTS.join(", ")}.</p>`
+      : M.ct.done ? `<p class="sub">${M.ct.champion ? E.ctClub(M.galaxy, M.ct.champion).name + " won the trophy." : "Tournament complete."}</p>`
+      : `<p class="sub">Knockout stage \u00b7 ${E.CT_ROUNDS[M.ct.koRound]} ${M.ct.alive ? "\u2014 you're still in it!" : "\u2014 you're out."}</p>`}
+    </div>`;
+  })() : "";
   return `<div class="screen">${mlTopbar()}
     <div class="panel"><h2>${M.tier === 0 ? (E.REGION_LEAGUES[M.region] || "National League") : "Continental Super League"}</h2>
+    ${worldTabs}
     ${table.map((t, i) => `<div class="kv" ${t.i === M.clubIdx ? 'style="color:var(--gold)"' : ""}>
       <span>${i + 1}. ${M.world.clubs[t.i].name}${t.i === M.clubIdx ? " (YOU)" : ""}${mlManagerOf(M.world.clubs[t.i]) ? ` <span class="sub">\ud83c\udfae ${mlManagerOf(M.world.clubs[t.i])}</span>` : ""}</span>
       <b>${t.Pts} pts \u00b7 ${t.GF}-${t.GA}</b></div>`).join("")}</div>
+    ${ctPanel}
     ${mlNav()}</div>`;
 }
 function mlNewsScreen() {

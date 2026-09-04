@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Football Legend · Admin</title>
+<style>
+:root{--bg:#0b0f0c;--panel:#121a14;--panel2:#0f1611;--line:#1f2b22;--gold:#e8c35a;--green:#38b26a;--red:#e05555;--tx:#e8ece8;--sub:#8fa096;--acc:#7fd67f}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--tx);font:14px/1.45 system-ui,Segoe UI,Roboto,sans-serif;min-height:100vh}
+a{color:var(--acc)}
+.layout{display:flex;min-height:100vh}
+/* sidebar */
+.side{width:220px;background:var(--panel2);border-right:1px solid var(--line);padding:18px 0;position:sticky;top:0;height:100vh;flex-shrink:0}
+.brand{padding:0 18px 18px;border-bottom:1px solid var(--line);margin-bottom:12px}
+.brand .b1{font-weight:800;letter-spacing:.5px}.brand .b2{color:var(--gold);font-weight:800}
+.brand .sub{font-size:11px;color:var(--sub)}
+.nav{display:flex;flex-direction:column}
+.nav button{all:unset;cursor:pointer;padding:11px 18px;color:var(--sub);display:flex;gap:10px;align-items:center;font-size:14px}
+.nav button:hover{background:#16211a;color:var(--tx)}
+.nav button.on{background:#16241b;color:var(--tx);border-right:3px solid var(--gold);font-weight:600}
+.me{position:absolute;bottom:0;left:0;right:0;padding:14px 18px;border-top:1px solid var(--line);font-size:12px;color:var(--sub);word-break:break-all}
+.me button{all:unset;cursor:pointer;color:var(--red);font-size:12px;margin-top:6px;display:block}
+/* main */
+.main{flex:1;padding:26px 30px;max-width:1100px}
+h1{font-size:20px;margin-bottom:4px}
+.crumb{color:var(--sub);font-size:12px;margin-bottom:22px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-bottom:22px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px}
+.card .k{color:var(--sub);font-size:12px;text-transform:uppercase;letter-spacing:.6px}
+.card .v{font-size:26px;font-weight:800;margin-top:4px}
+.card .d{font-size:11px;color:var(--sub);margin-top:2px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:18px}
+.panel h2{font-size:15px;margin-bottom:12px;color:var(--gold)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{color:var(--sub);text-align:left;font-weight:600;padding:7px 8px;border-bottom:1px solid var(--line);font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+td{padding:8px;border-bottom:1px solid #16201a;vertical-align:middle}
+tr:hover td{background:#141d16}
+.btn{background:var(--green);border:0;color:#04120a;font-weight:700;border-radius:8px;padding:8px 14px;cursor:pointer;font-size:13px}
+.btn.gold{background:var(--gold);color:#1a1405}
+.btn.red{background:var(--red);color:#fff}
+.btn.ghost{background:transparent;border:1px solid var(--line);color:var(--tx)}
+.btn.sm{padding:4px 10px;font-size:12px}
+.btn:disabled{opacity:.45;cursor:default}
+input,select,textarea{background:#0d1410;border:1px solid var(--line);border-radius:8px;color:var(--tx);padding:9px 11px;font-size:13px;width:100%}
+textarea{min-height:70px;resize:vertical}
+label{display:block;font-size:11px;color:var(--sub);text-transform:uppercase;letter-spacing:.5px;margin:10px 0 4px}
+.row{display:flex;gap:10px;align-items:end}.row>*{flex:1}
+.pill{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:700}
+.pill.g{background:#15301f;color:var(--acc)}.pill.r{background:#331515;color:#f0a0a0}.pill.y{background:#332b12;color:var(--gold)}
+.bars{display:flex;align-items:flex-end;gap:5px;height:110px;padding-top:8px}
+.bar{flex:1;background:linear-gradient(180deg,var(--acc),#1d5c38);border-radius:4px 4px 0 0;min-height:2px;position:relative}
+.bar span{position:absolute;top:-17px;left:50%;transform:translateX(-50%);font-size:10px;color:var(--sub)}
+.bar i{position:absolute;bottom:-18px;left:50%;transform:translateX(-50%);font-size:9px;color:var(--sub);font-style:normal}
+.lock{max-width:400px;margin:12vh auto;text-align:center}
+.lock .logo{font-size:26px;font-weight:800;margin-bottom:6px}
+.muted{color:var(--sub);font-size:12px}
+.toast{position:fixed;bottom:22px;right:22px;background:#173021;border:1px solid var(--green);color:var(--tx);padding:12px 18px;border-radius:10px;font-size:13px;opacity:0;transition:.25s;pointer-events:none;z-index:50}
+.toast.show{opacity:1}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+@media(max-width:900px){.grid2{grid-template-columns:1fr}.side{width:64px}.side .brand,.side .nav span,.side .me{display:none}.main{padding:16px}}
+code{background:#0d1410;padding:2px 6px;border-radius:5px;font-size:12px;color:var(--gold)}
+.flagged{color:var(--red);font-weight:700}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div class="toast" id="toast"></div>
+<script src="../vendor-supabase.js"></script>
+<script src="admin.js"></script>
+</body>
+</html>
