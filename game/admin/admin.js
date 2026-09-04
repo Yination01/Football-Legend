@@ -97,9 +97,21 @@ var PAGES = {
         card("Banned", r[2].count || 0, (r[3].count || 0) + " anti-cheat flags") +
         "</div>" +
         '<div class="panel"><h2>Daily active users \u00b7 last 14 days</h2><div class="bars" style="margin-bottom:20px">' + bars + "</div></div>" +
+        '<div class="panel"><h2>\ud83c\udf10 Top players right now</h2><div id="ov_lb" class="grid2"><p class="muted">loading\u2026</p></div></div>' +
         '<div class="panel"><h2>Quota safety (Supabase free tier)</h2><p class="muted">Auth: 50,000 monthly users \u00b7 DB: 500MB \u00b7 Functions: 500K calls/month. Current usage is far below all limits \u2014 the sync throttle (90s) keeps it that way.</p></div>';
     });
     function card(k, v, d) { return '<div class="card"><div class="k">' + k + '</div><div class="v">' + v + '</div><div class="d">' + d + "</div></div>"; }
+    Promise.all([sb.rpc("leaderboard_bal", { lim: 5 }), sb.rpc("leaderboard_ml", { lim: 5 })]).then(function (r) {
+      var el = $("#ov_lb"); if (!el) return;
+      var b = r[0].data || [], m = r[1].data || [];
+      var mk = function (title, rows, fmt) {
+        return "<div><h2>" + title + "</h2>" + (rows.length ? rows.map(fmt).join("") : "<p class='muted'>no entries yet</p>") + "</div>";
+      };
+      el.outerHTML = '<div class="grid2">' +
+        mk("\u2b50 Legends", b, function (x, i) { return "<p>" + (i + 1) + ". <b>" + esc(x.pname) + "</b> <span class='muted'>" + esc(x.name) + " \u00b7 rep " + x.rep + "</span></p>"; }) +
+        mk("\ud83c\udfc6 Clubs", m, function (x, i) { return "<p>" + (i + 1) + ". <b>" + esc(x.club) + "</b> <span class='muted'>" + esc(x.name) + " \u00b7 " + x.trophies + " trophies</span></p>"; }) +
+        "</div>";
+    }).catch(function () {});
   },
 
   players: function () {
