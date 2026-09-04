@@ -261,6 +261,8 @@ function createMatch(home, away, opts) {
   const role = ROLES[o.role || "balanced"] || ROLES.balanced;
   const P = o.player || null;
   const ps = P ? (PLAYSTYLES[P.playstyle] || null) : null;
+  const pskills = P ? (P.skills || []) : [];
+  const skM = (k) => skillMul(pskills, k, { losing70: st && st.min >= 70 && (pTeam === 0 ? st.gH < st.gA : st.gA < st.gH) });
   const pTeam = o.playerTeam; // 0 home, 1 away, null
   const posInfo = P ? POSITIONS[P.pos] : null;
 
@@ -309,7 +311,7 @@ function createMatch(home, away, opts) {
     const sm = ctx.scen || { shoot: 1, pass: 1 };
     if (choice === "shoot") {
       st.pShots++;
-      const conv = clampConv(base * (0.55 + (eS("SHO") / 100) * 0.9) * (ps ? ps.shoot : 1) * sm.shoot);
+      const conv = clampConv(base * (0.55 + (eS("SHO") / 100) * 0.9) * (ps ? ps.shoot : 1) * sm.shoot * skM("shoot"));
       if (rng() < conv) {
         if (ctx.isHome) st.gH++; else st.gA++;
         st.pGoals++; st.rating += 1.35;
@@ -319,7 +321,7 @@ function createMatch(home, away, opts) {
         out.push(ev(rng() < .5 ? "save" : "miss", ctx.isHome, { by: "you", choice, scen: ctx.scen && ctx.scen.id }));
       }
     } else if (choice === "pass") {
-      const conv = clampConv(base * (0.70 + (eS("PAS") / 100) * 0.65) * (ps ? ps.assist : 1) * sm.pass);
+      const conv = clampConv(base * (0.70 + (eS("PAS") / 100) * 0.65) * (ps ? ps.assist : 1) * sm.pass * skM("pass"));
       if (rng() < conv) {
         if (ctx.isHome) st.gH++; else st.gA++;
         st.pAssists++; st.rating += 0.9;
@@ -353,9 +355,10 @@ function createMatch(home, away, opts) {
     if (choice === "auto") choice = rng() < (ps && ps.rush ? ps.rush * 0.4 : 0.35) ? "rush" : "stay";
     const gs = ctx.scen || { stayAdj: 0, rushAdj: 0, blunder: 0.12 };
     const base = 0.28 + Math.pow(eS("DEF") / 100, 1.5) * 0.62; // elite keepers save like elite keepers (85-cap like FK)
+    const tb = pskills.includes("Track Back") ? 0.02 : 0;
     let saveP = choice === "stay"
-      ? Math.max(0.10, Math.min(0.85, base + gs.stayAdj + (role.gkStay || 0)))
-      : Math.max(0.10, Math.min(0.85, base + 0.06 + gs.rushAdj + (role.gkRush || 0)));
+      ? Math.max(0.10, Math.min(0.85, base + gs.stayAdj + (role.gkStay || 0) + tb))
+      : Math.max(0.10, Math.min(0.85, base + 0.06 + gs.rushAdj + (role.gkRush || 0) + tb));
     const blunder = choice === "rush" && rng() < Math.min(0.5, gs.blunder * (role.gkBlunderMul || 1));
     const scoredInitially = rng() < ctx.conv;
     let conceded;
@@ -383,14 +386,14 @@ function createMatch(home, away, opts) {
     st.pShots += (choice !== "cross") ? 1 : 0;
     let scoreP, isAssist = false;
     if (isPen) {
-      scoreP = choice === "place" ? 0.62 + Math.pow(eS("SHO") / 100, 2) * 0.32
+      scoreP = (choice === "place" ? 0.62 + Math.pow(eS("SHO") / 100, 2) * 0.32
              : choice === "blast" ? 0.60 + Math.pow(eS("PHY") / 100, 2) * 0.32
-             : 0.30 + Math.pow(eS("DRI") / 100, 2) * 0.55; // panenka: risky, DRI-driven
+             : (0.30 + Math.pow(eS("DRI") / 100, 2) * 0.55) * skM("panenka")) * skM("penalty"); // panenka: risky, DRI-driven
     } else {
-      scoreP = choice === "curler" ? 0.05 + Math.pow(eS("SHO") / 100, 2) * 0.82
-             : choice === "power" ? 0.05 + Math.pow((eS("SHO") * 0.6 + eS("PHY") * 0.4) / 100, 2) * 0.75
+      scoreP = choice === "curler" ? (0.05 + Math.pow(eS("SHO") / 100, 2) * 0.82) * skM("fkCurler")
+             : choice === "power" ? (0.05 + Math.pow((eS("SHO") * 0.6 + eS("PHY") * 0.4) / 100, 2) * 0.75) * skM("fkPower")
              : 0; // cross resolves as assist chance
-      if (choice === "cross") { isAssist = true; scoreP = 0.06 + Math.pow(eS("PAS") / 100, 2) * 0.72; }
+      if (choice === "cross") { isAssist = true; scoreP = (0.06 + Math.pow(eS("PAS") / 100, 2) * 0.72) * skM("fkCross"); }
     }
     const scored = rng() < Math.min(0.94, scoreP);
     if (scored) {
@@ -577,19 +580,48 @@ function createMatch(home, away, opts) {
 }
 
 // Honest decision odds — EXACT mirrors of resolveChance/resolveGK math.
+// PES-style player skills — multipliers applied IDENTICALLY in decisionOdds and resolve math.
+const SKILLS = {
+  "Outside Curler":      { fkCurler: 1.18, shoot: 1.04 },
+  "Long Range Drive":    { shoot: 1.06, fkPower: 1.10 },
+  "First-time Shot":     { shoot: 1.08 },
+  "Chip Shot Control":   { panenka: 1.25 },
+  "Heading":             { shoot: 1.05 },
+  "Acrobatic Finishing": { shoot: 1.07 },
+  "Through Passing":     { pass: 1.10 },
+  "Pinpoint Crossing":   { fkCross: 1.15, pass: 1.05 },
+  "One-touch Pass":      { pass: 1.08 },
+  "Captaincy":           {}, // team-wide: handled at team-strength level
+  "Fighting Spirit":     { losing70: 1.12 }, // shoot+pass when losing after 70'
+  "Super-sub":           {}, // handled by UI (sub context)
+  "Track Back":          { gkStay: 0.02 }, // small defensive bump (outfield: reserved)
+  "Penalty Specialist":  { penalty: 1.12 }
+};
+function skillMul(skills, key, ctx2) {
+  let m = 1;
+  for (const s of skills || []) {
+    const def = SKILLS[s]; if (!def) continue;
+    if (def[key]) m *= def[key];
+    if (key === "shoot" || key === "pass") {
+      if (def.losing70 && ctx2 && ctx2.losing70) m *= def.losing70;
+    }
+  }
+  return m;
+}
 function decisionOdds(dec, player, roleId) {
   const P = player, ps = PLAYSTYLES[P.playstyle] || null;
+  const sk = (k) => skillMul(P.skills, k, dec.skctx);
   const clamp = (c) => Math.max(0.05, Math.min(0.62, c));
   const fat = 0.75 + 0.25 * ((dec.stam != null ? dec.stam : 100) / 100);
   const eS = (k) => P.eff[k] * fat;
   if (dec.type === "penalty") return { type: "penalty", stam: Math.round(dec.stam || 100),
-    place: Math.round(Math.min(94, (0.62 + Math.pow(eS("SHO") / 100, 2) * 0.32) * 100)),
-    blast: Math.round(Math.min(94, (0.60 + Math.pow(eS("PHY") / 100, 2) * 0.32) * 100)),
-    panenka: Math.round(Math.min(94, (0.30 + Math.pow(eS("DRI") / 100, 2) * 0.55) * 100)) };
+    place: Math.round(Math.min(94, (0.62 + Math.pow(eS("SHO") / 100, 2) * 0.32) * sk("penalty") * 100)),
+    blast: Math.round(Math.min(94, (0.60 + Math.pow(eS("PHY") / 100, 2) * 0.32) * sk("penalty") * 100)),
+    panenka: Math.round(Math.min(94, (0.30 + Math.pow(eS("DRI") / 100, 2) * 0.55) * sk("panenka") * sk("penalty") * 100)) };
   if (dec.type === "freekick") return { type: "freekick", stam: Math.round(dec.stam || 100),
-    curler: Math.round((0.05 + Math.pow(eS("SHO") / 100, 2) * 0.82) * 100),
-    power: Math.round((0.05 + Math.pow((eS("SHO") * 0.6 + eS("PHY") * 0.4) / 100, 2) * 0.75) * 100),
-    cross: Math.round((0.06 + Math.pow(eS("PAS") / 100, 2) * 0.72) * 100) };
+    curler: Math.round(Math.min(94, (0.05 + Math.pow(eS("SHO") / 100, 2) * 0.82) * sk("fkCurler") * 100)),
+    power: Math.round(Math.min(94, (0.05 + Math.pow((eS("SHO") * 0.6 + eS("PHY") * 0.4) / 100, 2) * 0.75) * sk("fkPower") * 100)),
+    cross: Math.round(Math.min(94, (0.06 + Math.pow(eS("PAS") / 100, 2) * 0.72) * sk("fkCross") * 100)) };
   if (dec.type === "gkpen") return { type: "gkpen", stam: Math.round(dec.stam || 100),
     dive: Math.round((0.34 + eS("DEF") * 0.004) * 33 + 6),  // expected over shooter dirs
     stay: Math.round(0.72 * 33 + 4) };
@@ -597,8 +629,9 @@ function decisionOdds(dec, player, roleId) {
     const role = ROLES[roleId] || ROLES.balanced;
     const gs = dec.scen || { stayAdj: 0, rushAdj: 0, blunder: 0.12 };
     const base = 0.28 + Math.pow(eS("DEF") / 100, 1.5) * 0.62;
-    const spStay = Math.max(0.10, Math.min(0.85, base + gs.stayAdj + (role.gkStay || 0)));
-    const spRush = Math.max(0.10, Math.min(0.85, base + 0.06 + gs.rushAdj + (role.gkRush || 0)));
+    const tb = (P.skills || []).includes("Track Back") ? 0.02 : 0;
+    const spStay = Math.max(0.10, Math.min(0.85, base + gs.stayAdj + (role.gkStay || 0) + tb));
+    const spRush = Math.max(0.10, Math.min(0.85, base + 0.06 + gs.rushAdj + (role.gkRush || 0) + tb));
     const bl = Math.min(0.5, gs.blunder * (role.gkBlunderMul || 1));
     const stayConcede = dec.conv * (1 - 0.85 * spStay);
     const rushConcede = bl + (1 - bl) * dec.conv * (1 - 0.85 * spRush);
@@ -607,8 +640,8 @@ function decisionOdds(dec, player, roleId) {
       blunder: Math.round(bl * 100) };
   }
   const sm = dec.scen || { shoot: 1, pass: 1 };
-  const shoot = clamp(dec.conv * (0.55 + (eS("SHO") / 100) * 0.9) * (ps ? ps.shoot : 1) * sm.shoot);
-  const pass = clamp(dec.conv * (0.70 + (eS("PAS") / 100) * 0.65) * (ps ? ps.assist : 1) * sm.pass);
+  const shoot = clamp(dec.conv * (0.55 + (eS("SHO") / 100) * 0.9) * (ps ? ps.shoot : 1) * sm.shoot * sk("shoot"));
+  const pass = clamp(dec.conv * (0.70 + (eS("PAS") / 100) * 0.65) * (ps ? ps.assist : 1) * sm.pass * sk("pass"));
   const hold = Math.min(0.95, 0.45 + eS("DRI") / 220 + eS("PHY") / 300 + (ps ? (ps.hold - 1) * 0.15 : 0));
   return { type: "chance", xg: Math.round(dec.conv * 100), stam: Math.round(dec.stam != null ? dec.stam : 100),
     shoot: Math.round(shoot * 100), pass: Math.round(pass * 100), hold: Math.round(hold * 100) };
@@ -685,6 +718,143 @@ function makeWorld(tier, saveSeed, region) {
   return { tier, clubs, fixtures, h2h };
 }
 
+// ---------- Galaxy: the 6-league world ----------
+const LEAGUE_DEFS = [
+  { id: "pnl",  name: "Premier National League", region: "britain",
+    strs: [86, 83, 80, 78, 74, 72, 70, 68, 66, 64], subs: 5 }, // 4 elite, deep
+  { id: "liga", name: "Liga Nacional", region: "southeuro",
+    strs: [86, 83, 74, 72, 70, 68, 67, 66, 64, 62], subs: 5 }, // 2 giants
+  { id: "ligue", name: "Ligue Nationale", region: "westeuro",
+    strs: [85, 75, 73, 71, 70, 68, 67, 66, 65, 64], subs: 5 }, // 1 dominant
+  { id: "vostok", name: "Vostok Liga", region: "easteuro",
+    strs: [75, 74, 70, 68, 66, 64, 62, 60, 59, 58], subs: 5 },
+  { id: "camp", name: "Campeonato Nacional", region: "southam",
+    strs: [78, 75, 72, 70, 68, 66, 64, 63, 62, 61], subs: 6 }, // volatile, 6 subs
+  { id: "nordisk", name: "Nordisk Ligaen", region: "northeuro",
+    strs: [72, 70, 69, 68, 66, 65, 64, 62, 61, 60], subs: 6 }  // flat, 6 subs
+];
+function leagueForRegion(region) {
+  const i = LEAGUE_DEFS.findIndex(d => d.region === region);
+  return i >= 0 ? i : 5; // africa/asia careers start in the flat Nordisk-profile league
+}
+function makeGalaxy(saveSeed) {
+  const leagues = LEAGUE_DEFS.map((def, li) => {
+    const rng = mulberry32(hashSeed(saveSeed + ":gal:" + def.id));
+    const base = genStarterClubs(def.region, rng);
+    const clubs = base.map((c, i) => Object.assign({}, c, { str: def.strs[i] + Math.round((rng() - 0.5) * 2) }));
+    return { id: def.id, name: def.name, subs: def.subs, clubs,
+             fixtures: makeFixtures(clubs.map((_, i) => i), rng), results: [], h2h: {} };
+  });
+  return { leagues, season: 1 };
+}
+function galaxySimMD(gal, leagueSkip, md, saveSeed, season) {
+  // sim one matchday of every league except leagueSkip (yours is played/simmed by the game)
+  gal.leagues.forEach((L, li) => {
+    if (li === leagueSkip) return;
+    const mdFx = L.fixtures[md]; if (!mdFx) return;
+    for (const [h, a] of mdFx) {
+      const r = simulateMatch(L.clubs[h], L.clubs[a], { seed: hashSeed(saveSeed + ":g" + li + ":s" + season + ":md" + md + ":" + h + "v" + a), fast: true });
+      L.results.push({ home: h, away: a, gH: r.gH, gA: r.gA });
+    }
+  });
+}
+function galaxyRollover(gal, saveSeed, season) {
+  // returns continental qualifiers from final tables, then resets league results/fixtures
+  const cl = [], shield = [];
+  gal.leagues.forEach((L, li) => {
+    const t = computeTable(L.clubs, L.results);
+    const strong = li <= 2; // top-3 leagues send 2 to the Champions Trophy
+    cl.push({ league: li, club: t[0].i });
+    if (strong && t[1]) cl.push({ league: li, club: t[1].i });
+    if (t[strong ? 2 : 1]) shield.push({ league: li, club: t[strong ? 2 : 1].i });
+    const rng = mulberry32(hashSeed(saveSeed + ":refix:" + li + ":" + (season + 1)));
+    L.results = [];
+    L.fixtures = makeFixtures(L.clubs.map((_, i) => i), rng);
+  });
+  gal.season = season + 1;
+  return { cl: cl.slice(0, 16), shield: shield.slice(0, 8) };
+}
+
+// ---------- Continental: Champions Trophy + Continental Shield ----------
+// Entrants: [{league, club}] resolved against a galaxy. State machine is mode-agnostic.
+function ctMake(entrants, myEntry, seed) {
+  const rng = mulberry32(hashSeed(seed + ":ctdraw"));
+  const pool = entrants.slice();
+  // guarantee my club is included
+  const meIn = myEntry && pool.some(x => x.league === myEntry.league && x.club === myEntry.club);
+  if (myEntry && !meIn) pool[0] = myEntry;
+  // shuffle & 4 groups of 4 (pad with best-effort if short)
+  for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]]; }
+  while (pool.length < 16) pool.push(pool[Math.floor(rng() * pool.length)]);
+  const groups = [0, 1, 2, 3].map(g => pool.slice(g * 4, g * 4 + 4));
+  let myG = -1, myS = -1;
+  if (myEntry) groups.forEach((g, gi) => g.forEach((e2, si) => { if (e2.league === myEntry.league && e2.club === myEntry.club) { myG = gi; myS = si; } }));
+  return { groups, myG, myS, gRes: [], gPlayed: 0, stage: "group", ko: null, koRound: 0, alive: myG >= 0, done: false, champion: null };
+}
+function ctClub(gal, e2) { return gal.leagues[e2.league].clubs[e2.club]; }
+function ctGroupFixtures(slot) { // 6 MDs of a 4-team double round-robin, from one slot's perspective
+  const others = [0, 1, 2, 3].filter(x => x !== slot);
+  return [
+    { opp: others[0], home: true }, { opp: others[1], home: false }, { opp: others[2], home: true },
+    { opp: others[0], home: false }, { opp: others[1], home: true }, { opp: others[2], home: false }
+  ];
+}
+function ctSimGroups(ct, gal, seed, uptoMD, skipMine) {
+  // sim all group matches for matchdays < uptoMD that are not mine (mine come from real play)
+  const fxAll = [[0,1,2,3].map(()=>null)]; // placeholder — we sim pairwise directly
+  for (let md = 0; md < uptoMD; md++) {
+    ct.groups.forEach((g, gi) => {
+      const pairs = md % 3 === 0 ? [[0, 1], [2, 3]] : md % 3 === 1 ? [[0, 2], [1, 3]] : [[0, 3], [1, 2]];
+      const swap = md >= 3;
+      for (let [x, y] of pairs) {
+        if (swap) [x, y] = [y, x];
+        if (skipMine && gi === ct.myG && (x === ct.myS || y === ct.myS)) continue;
+        const key = gi + ":" + md + ":" + x + "v" + y;
+        if (ct.gRes.some(r => r.key === key)) continue;
+        const r = simulateMatch(ctClub(gal, ct.groups[gi][x]), ctClub(gal, ct.groups[gi][y]), { seed: hashSeed(seed + ":ctg:" + key), fast: true });
+        ct.gRes.push({ key, g: gi, h: x, a: y, gH: r.gH, gA: r.gA });
+      }
+    });
+  }
+}
+function ctGroupTable(ct, gi) {
+  const rows = [0, 1, 2, 3].map(s => ({ s, P: 0, Pts: 0, GD: 0, GF: 0 }));
+  for (const r of ct.gRes) {
+    if (r.g !== gi) continue;
+    const h = rows[r.h], a = rows[r.a];
+    h.P++; a.P++; h.GF += r.gH; a.GF += r.gA; h.GD += r.gH - r.gA; a.GD += r.gA - r.gH;
+    if (r.gH > r.gA) h.Pts += 3; else if (r.gH < r.gA) a.Pts += 3; else { h.Pts++; a.Pts++; }
+  }
+  rows.sort((x, y) => y.Pts - x.Pts || y.GD - x.GD || y.GF - x.GF);
+  return rows;
+}
+function ctAdvanceToKO(ct, gal, seed) {
+  const qual = [];
+  ct.groups.forEach((g, gi) => {
+    const t = ctGroupTable(ct, gi);
+    qual.push(ct.groups[gi][t[0].s], ct.groups[gi][t[1].s]);
+  });
+  const rng = mulberry32(hashSeed(seed + ":ctko"));
+  for (let i = qual.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [qual[i], qual[j]] = [qual[j], qual[i]]; }
+  ct.stage = "ko"; ct.ko = qual; ct.koRound = 0;
+  ct.alive = ct.alive && qual.some(e2 => ct.myG >= 0 && e2.league === ct.groups[ct.myG][ct.myS].league && e2.club === ct.groups[ct.myG][ct.myS].club);
+}
+function ctSimKORound(ct, gal, seed, skipMine, myEntry) {
+  // pairs [0,1],[2,3]... winner advances; returns my fixture if skipped
+  const next = []; let myFx = null;
+  for (let i = 0; i < ct.ko.length; i += 2) {
+    const A = ct.ko[i], B = ct.ko[i + 1];
+    const mine = myEntry && [A, B].some(e2 => e2.league === myEntry.league && e2.club === myEntry.club);
+    if (skipMine && mine) { myFx = { A, B, slot: next.length }; next.push(null); continue; }
+    const r = simulateMatch(ctClub(gal, A), ctClub(gal, B), { seed: hashSeed(seed + ":ctko:" + ct.koRound + ":" + i), fast: true });
+    let w = r.gH > r.gA ? A : r.gH < r.gA ? B : (mulberry32(hashSeed(seed + "p" + i))() < 0.5 ? A : B);
+    next.push(w);
+  }
+  return { next, myFx };
+}
+const CT_ROUNDS = ["Quarter-final", "Semi-final", "FINAL"];
+const CT_GROUP_AFTER_MD = [2, 5, 8, 11, 14, 16]; // continental nights after these league MDs
+
 // ---------- Table ----------
 function computeTable(clubs, results) {
   const rows = clubs.map((c, i) => ({ i, name: c.name, short: c.short, P: 0, W: 0, D: 0, L: 0, GF: 0, GA: 0, Pts: 0 }));
@@ -704,7 +874,9 @@ const Engine = {
   POSITIONS, PLAYSTYLES, stylesFor, ROLES, rolesFor, baseStats, calcOVR,
   createMatch, simulateMatch, winProbs, makeWorld, computeTable, decisionOdds,
   REGION_LEAGUES, genStarterClubs,
-  STARTER_CLUBS, EURO_CLUBS
+  STARTER_CLUBS, EURO_CLUBS, SKILLS, skillMul,
+  LEAGUE_DEFS, leagueForRegion, makeGalaxy, galaxySimMD, galaxyRollover,
+  ctMake, ctClub, ctGroupFixtures, ctSimGroups, ctGroupTable, ctAdvanceToKO, ctSimKORound, CT_ROUNDS, CT_GROUP_AFTER_MD
 };
 if (typeof module !== "undefined") module.exports = Engine;
 if (typeof window !== "undefined") window.Engine = Engine;

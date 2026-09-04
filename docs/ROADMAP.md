@@ -9,19 +9,28 @@
 - **Persistence:** localStorage + Capacitor Preferences mirror + Documents backup file (uninstall-proof, restore prompt on reinstall) + Android Auto Backup + manual backup codes.
 - **Android app:** Capacitor wrapper, debug APK builds, splash + icon.
 
-## Update 2 (next)
+## Launch prep (v1.1) — DONE ✅
 
-- [ ] Master League match-view parity: 2D live + cutscenes in ML matches (currently BaL-grade in BaL only).
-- [ ] Ghost PvP: play against a friend's exported squad with their tactics AI-driven.
-- [ ] Onboarding polish + achievements.
-- [ ] Continued phone playtest fixes.
+- [x] Master League 2D live view (formation-aware pitch, attack banner/arrows, danger tint, event flashes).
+- [x] Sound everywhere: crowd, whistles, goal roars, UI tap sounds (synthesized, $0 assets).
+- [x] First-launch onboarding overlay (60-second intro to the three modes).
+- [x] $0 crash diagnostics: on-device error log, copyable from Settings.
+- [x] Release keystore + signed release APK + Play Store `.aab` (v1.1, versionCode 2).
+- [x] Store pack: listing copy, privacy policy, icon 512, feature graphic 1024×500, launch checklist.
 
-## Release track
+## To launch (owner actions — see store/LAUNCH-CHECKLIST.md)
 
-- [ ] Release keystore + signed `.aab` (`./gradlew bundleRelease`).
-- [ ] Google Play developer account ($25, funded from revenue).
-- [ ] Store listing: screenshots, description, content rating.
-- [ ] Monetization (post-launch): rewarded ads / IAP for Legend Coins — only after the game is fun free.
+- [ ] Back up the release keystore in 2+ places.
+- [ ] Device test the release APK; friend playtest (5–10 people).
+- [ ] Phone screenshots for the store listing.
+- [ ] Host privacy policy (GitHub Pages).
+- [ ] Play Console account ($25) → internal test → closed test (12 testers/14 days for new accounts) → production.
+
+## Post-launch
+
+- [ ] Ghost PvP (friend's squad with AI tactics).
+- [ ] Monetization only after retention is proven: rewarded ads / LC purchases.
+- [ ] Online PvP when revenue supports a server.
 
 ## Deferred until revenue
 

@@ -7,3 +7,12 @@ app/android/local.properties
 app/android/app/release/
 *.hprof
 .DS_Store
+# NEVER commit signing secrets
+release.keystore
+keystore.properties
+KEYSTORE-CREDENTIALS.txt
+*.aab
+
+# but release artifacts are allowed
+!releases/*.aab
+!releases/*.apk

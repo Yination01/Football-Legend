@@ -56,13 +56,18 @@ node test-fairness.js   # odds honesty: displayed odds == engine odds
 node test-ml.js         # 350+ Master League checks
 ```
 
-## Current release
+## Current release — v1.1 (launch candidate)
 
-`releases/FootballLegend.apk` — debug-signed build including:
-- 2D live match view with 9+ position-aware goal choreographies, replays, keeper AI
-- Attack-state indicators (ATTACKING / DANGEROUS ATTACK) with direction arrows, momentum sparkline, danger tint
-- Uninstall-proof saves: Documents backup file + Android Auto Backup + restore prompt on reinstall
-- Backup codes for manual cross-device transfer
+- `releases/FootballLegend-release.apk` — **release-signed, share this one**
+- `releases/FootballLegend.apk` — debug build (development only)
+
+Includes:
+- 2D live match view in BOTH Become a Legend and Master League — choreographies, replays, attack arrows, DANGEROUS ATTACK warnings, momentum sparkline, danger tint
+- Full synthesized sound (crowd, whistles, goal roars, UI) — zero asset cost
+- First-launch onboarding; on-device error log (Settings → COPY to report bugs)
+- Uninstall-proof saves: Documents backup + Auto Backup + restore prompt + backup codes
+
+Store submission pack lives in `store/` (listing copy, privacy policy, graphics, launch checklist).
 
 ## Roadmap
 

@@ -359,3 +359,19 @@ input, textarea { user-select: text; -webkit-user-select: text; font-size: 16px 
 @keyframes atkpulse { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
 .sparkwrap { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
 .spark { flex: 1; height: 22px; }
+
+/* ---- card tier chips: unmistakable visual identity ---- */
+.cardchip {
+  display: inline-block; padding: 1px 7px; border-radius: 4px;
+  font-size: .58rem; font-weight: 900; letter-spacing: .6px; vertical-align: middle;
+}
+.cardstd   { background: #3a4a3e; color: #cfd8d0; border: 1px solid #55655a; }
+.cardtrend { background: linear-gradient(135deg, #1565c0, #42a5f5); color: #fff; border: 1px solid #90caf9; }
+.cardshow  { background: linear-gradient(135deg, #6a1b9a, #ab47bc); color: #fff; border: 1px solid #ce93d8;
+             box-shadow: 0 0 6px rgba(171, 71, 188, .6); }
+.cardbig   { background: linear-gradient(135deg, #c62828, #ef5350); color: #fff; border: 1px solid #ef9a9a;
+             box-shadow: 0 0 6px rgba(239, 83, 80, .6); }
+.cardleg   { background: linear-gradient(135deg, #b8860b, #ffd700, #b8860b); color: #1a1205; border: 1px solid #ffe97a;
+             box-shadow: 0 0 10px rgba(255, 215, 0, .7); animation: legglow 2s ease-in-out infinite; }
+@keyframes legglow { 0%, 100% { box-shadow: 0 0 6px rgba(255,215,0,.5); } 50% { box-shadow: 0 0 14px rgba(255,215,0,.95); } }
+.chip.gold { border-color: rgba(255, 215, 94, .5); color: var(--gold); }

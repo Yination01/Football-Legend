@@ -62,10 +62,33 @@ const Snd = (() => {
     goalUs() { swell(0.32, 2.2); },
     goalThem() { swell(0.09, 1.1); },
     chance() { swell(0.14, 0.8); },
-    save() { swell(0.12, 0.9); }
+    save() { swell(0.12, 0.9); },
+    tap() {
+      const c = ac(); if (!c || !on()) return;
+      const o = c.createOscillator(); o.type = "sine"; o.frequency.value = 1250;
+      const g = c.createGain();
+      g.gain.setValueAtTime(0.03, c.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.0001, c.currentTime + 0.05);
+      o.connect(g); g.connect(c.destination); o.start(); o.stop(c.currentTime + 0.06);
+    }
   };
 })();
 window.Snd = Snd;
+
+// ---- $0 crash diagnostics: ring-buffer error log (view/copy in Settings) ----
+function flLogErr(kind, msg, src, line) {
+  try {
+    const log = JSON.parse(localStorage.getItem("flErrLog") || "[]");
+    log.unshift({ t: new Date().toISOString(), k: kind, m: String(msg).slice(0, 300), s: String(src || "").split("/").pop().slice(0, 60), l: line || 0 });
+    localStorage.setItem("flErrLog", JSON.stringify(log.slice(0, 30)));
+  } catch (e) {}
+}
+window.addEventListener("error", (e) => flLogErr("err", e.message, e.filename, e.lineno));
+window.addEventListener("unhandledrejection", (e) => flLogErr("rej", (e.reason && e.reason.message) || e.reason));
+
+document.addEventListener("click", (e) => {
+  if (e.target.closest(".btn, .opt, .tile, .nav > div")) { try { Snd.tap(); } catch (x) {} }
+}, true);
 
 // ---------- State ----------
 let S = null; // save state
@@ -73,9 +96,14 @@ let S = null; // save state
 function newSave(name, pos, playstyle, region) {
   const seed = "save-" + Date.now();
   const world = E.makeWorld(0, seed, region);
+  const galaxy0 = E.makeGalaxy(seed);
+  const li0 = E.leagueForRegion(region);
+  galaxy0.leagues[li0].clubs = world.clubs;       // my starting league IS a galaxy league
+  galaxy0.leagues[li0].fixtures = world.fixtures; // same clubs, same fixtures, one world
   const stats = E.baseStats(pos);
   return {
     seed, name, pos, playstyle, region, stats,
+    age: 17, retired: false,
     xp: 0, sp: 0, level: 1,
     cardType: "standard", cardTimer: 0,
     form: 0, // -2..+2 rolling
@@ -86,6 +114,7 @@ function newSave(name, pos, playstyle, region) {
     results: [],       // played fixtures this season {home,away,gH,gA}
     myStats: { apps: 0, goals: 0, assists: 0, ratings: [] },
     career: { seasons: [], totalGoals: 0, totalApps: 0 },
+    skills: [], // PES-style learned skills
     trainedToday: false,
     lastFive: [],      // my club results W/D/L
     role: "balanced",
@@ -98,6 +127,8 @@ function newSave(name, pos, playstyle, region) {
     scorers: {},           // golden boot race: name -> goals
     cosmetics: {},
     cup: { round: 0, alive: true },
+    galaxy: galaxy0, leagueIdx: li0, galMD: 0, ct: null,
+    janOffered: false, janOffer: null,
     lastLogin: null, loginStreak: 0,
     condition: 100, injury: 0,        // matches remaining out
     upgrades: { fitness: 0, medical: 0, agentNet: 0 }
@@ -177,7 +208,10 @@ function load() {
 
 // ---------- Helpers ----------
 function myClub() { return S.world.clubs[S.clubIdx]; }
-function leagueName() { return S.tier === 0 ? (E.REGION_LEAGUES[S.region] || "National League") : "Continental Super League"; }
+function leagueName() {
+  if (S.galaxy && S.galaxy.leagues[S.leagueIdx]) return S.galaxy.leagues[S.leagueIdx].name;
+  return S.tier === 0 ? (E.REGION_LEAGUES[S.region] || "National League") : "Continental Super League";
+}
 function ovr() { return E.calcOVR(S.stats, S.pos); }
 function effStats() {
   // card type + form + consumable buffs give honest, visible modifiers
@@ -204,6 +238,92 @@ function crest(c) {
 }
 const CUP_ROUNDS = ["Quarter-Final", "Semi-Final", "FINAL"];
 const CUP_AFTER_MD = [6, 12, 16];
+// ---------- Galaxy (6-league world) + Champions Trophy ----------
+const BAL_CT_NIGHTS = [3, 6, 9, 12, 15, 17]; // CT group nights unlock after these league MDs
+function balGalaxySim() { // sim other 5 leagues up to my current matchday (dedupe via counter)
+  if (!S.galaxy) return;
+  S.galMD = S.galMD || 0;
+  while (S.galMD < S.matchday && S.galMD < 18) {
+    try { E.galaxySimMD(S.galaxy, S.leagueIdx, S.galMD, S.seed, S.season); } catch (e) {}
+    S.galMD++;
+  }
+}
+function balCtMyEntry() { return S.ct && S.ct.myG >= 0 ? S.ct.groups[S.ct.myG][S.ct.myS] : null; }
+function balCtGroupMDDue() {
+  if (!S.galaxy || !S.ct || !S.ct.alive || S.ct.stage !== "group") return -1;
+  const due = BAL_CT_NIGHTS.filter(n => S.matchday >= n).length;
+  return S.ct.gPlayed < due ? S.ct.gPlayed : -1;
+}
+function balCtKODue() {
+  return !!(S.galaxy && S.ct && S.ct.alive && S.ct.stage === "ko" && S.matchday >= 18 && !S.ct.done);
+}
+function balCtFixture() { // pseudo-fixture for a Champions Trophy night
+  const gmd = balCtGroupMDDue();
+  if (gmd >= 0) {
+    const pairs = gmd % 3 === 0 ? [[0, 1], [2, 3]] : gmd % 3 === 1 ? [[0, 2], [1, 3]] : [[0, 3], [1, 2]];
+    let [x, y] = pairs.find(p => p.includes(S.ct.myS));
+    if (gmd >= 3) [x, y] = [y, x];
+    const home = x === S.ct.myS;
+    const opp = S.ct.groups[S.ct.myG][home ? y : x];
+    return { ct: true, ctStage: "group", ctMD: gmd, opp, ctX: x, ctY: y, oppClub: E.ctClub(S.galaxy, opp), ctHome: home,
+             home: home ? S.clubIdx : -1, away: home ? -1 : S.clubIdx };
+  }
+  if (balCtKODue()) {
+    const meE = balCtMyEntry();
+    const r = E.ctSimKORound(S.ct, S.galaxy, S.seed + ":bal:s" + S.season, true, meE);
+    if (!r.myFx) return null;
+    const opp = (r.myFx.A.league === meE.league && r.myFx.A.club === meE.club) ? r.myFx.B : r.myFx.A;
+    return { ct: true, ctStage: "ko", opp, oppClub: E.ctClub(S.galaxy, opp), ctHome: true, home: S.clubIdx, away: -1, koPre: r };
+  }
+  return null;
+}
+function balCtRecord(fx, gH, gA) { // shared by finishMatch, injured sim-out and abandoned resolver
+  const my = fx.ctHome ? gH : gA, op = fx.ctHome ? gA : gH;
+  const res = my > op ? "W" : my === op ? "D" : "L";
+  let gp = 0, lc = 0;
+  if (fx.ctStage === "group") {
+    const gi = S.ct.myG;
+    const key = gi + ":" + fx.ctMD + ":" + fx.ctX + "v" + fx.ctY;
+    S.ct.gRes.push({ key, g: gi, h: fx.ctX, a: fx.ctY, gH, gA });
+    S.ct.gPlayed++;
+    E.ctSimGroups(S.ct, S.galaxy, S.seed + ":bal:s" + S.season, S.ct.gPlayed, true);
+    if (res === "W") gp += 400;
+    if (S.ct.gPlayed >= 6) {
+      E.ctAdvanceToKO(S.ct, S.galaxy, S.seed + ":bal:s" + S.season);
+      if (S.ct.alive) { lc += 10; pushNews("\ud83c\udf0d " + myClub().name + " reach the CHAMPIONS TROPHY quarter-finals! (+10 LC)"); }
+      else {
+        pushNews("\ud83c\udf0d Champions Trophy group-stage exit for " + myClub().name + ".");
+        while (S.ct.ko.length > 1 && S.ct.koRound <= 2) { const rr = E.ctSimKORound(S.ct, S.galaxy, S.seed + ":bal:s" + S.season, false, null); S.ct.ko = rr.next; S.ct.koRound++; }
+        S.ct.done = true; S.ct.champion = S.ct.ko[0] || null;
+        if (S.ct.champion) pushNews("\ud83c\udf0d " + E.ctClub(S.galaxy, S.ct.champion).name + " win the Champions Trophy.");
+      }
+    }
+  } else { // KO
+    const meE = balCtMyEntry();
+    let win = my > op || (my === op && Math.random() < 0.5); // pens usually resolved by caller; safety
+    if (my !== op) win = my > op;
+    const pre = fx.koPre;
+    const next = pre.next.map(x => x === null ? (win ? meE : fx.opp) : x);
+    if (win) {
+      gp += [800, 1200, 2500][S.ct.koRound]; lc += [5, 8, 25][S.ct.koRound];
+      pushNews("\ud83c\udf0d " + E.CT_ROUNDS[S.ct.koRound] + " won! " + myClub().name + " march on.");
+      if (S.ct.koRound >= 2) {
+        S.ct.done = true; S.ct.champion = meE;
+        S.flags.ctWinner = true; S.flags.ctsWon = (S.flags.ctsWon || 0) + 1;
+        pushNews("\ud83c\udf0d\ud83c\udfc6 " + myClub().name + " are CHAMPIONS TROPHY WINNERS! " + S.name + " conquers the continent!");
+      } else { S.ct.ko = next; S.ct.koRound++; }
+    } else {
+      S.ct.alive = false;
+      pushNews("\ud83c\udf0d Champions Trophy exit at the " + E.CT_ROUNDS[S.ct.koRound] + " stage.");
+      S.ct.ko = next; S.ct.koRound++;
+      while (S.ct.ko.length > 1 && S.ct.koRound <= 2) { const rr = E.ctSimKORound(S.ct, S.galaxy, S.seed + ":bal:s" + S.season, false, null); S.ct.ko = rr.next; S.ct.koRound++; }
+      S.ct.done = true; S.ct.champion = S.ct.ko[0] || null;
+      if (S.ct.champion) pushNews("\ud83c\udf0d " + E.ctClub(S.galaxy, S.ct.champion).name + " win the Champions Trophy.");
+    }
+  }
+  S.gp += gp; S.nl += lc;
+  return { res, gp, lc };
+}
 function cupPending() {
   return S.cup.alive && S.cup.round < 3 && S.matchday >= CUP_AFTER_MD[S.cup.round];
 }
@@ -303,6 +423,72 @@ function bindNav() {
     if (v === "shop") render(shopScreen);
     if (v === "career") render(careerScreen);
   });
+}
+
+// ---- PES-style skills: hybrid acquisition (2 milestone slots + 3 purchasable) ----
+const BAL_SKILL_POOL = {
+  GK:  ["Track Back", "Captaincy", "Penalty Specialist", "Long Range Drive"],
+  CB:  ["Heading", "Captaincy", "Track Back", "First-time Shot"],
+  LB:  ["Pinpoint Crossing", "Track Back", "One-touch Pass", "Captaincy"],
+  RB:  ["Pinpoint Crossing", "Track Back", "One-touch Pass", "Captaincy"],
+  DMF: ["Through Passing", "Long Range Drive", "Track Back", "Captaincy", "One-touch Pass"],
+  CMF: ["Through Passing", "One-touch Pass", "Long Range Drive", "Captaincy", "Outside Curler"],
+  AMF: ["Through Passing", "Outside Curler", "First-time Shot", "Chip Shot Control", "One-touch Pass", "Penalty Specialist"],
+  LWF: ["Outside Curler", "Pinpoint Crossing", "First-time Shot", "Acrobatic Finishing", "Chip Shot Control"],
+  RWF: ["Outside Curler", "Pinpoint Crossing", "First-time Shot", "Acrobatic Finishing", "Chip Shot Control"],
+  SS:  ["First-time Shot", "Chip Shot Control", "Acrobatic Finishing", "Outside Curler", "Penalty Specialist", "Fighting Spirit"],
+  CF:  ["First-time Shot", "Heading", "Acrobatic Finishing", "Penalty Specialist", "Fighting Spirit", "Chip Shot Control"]
+};
+function balSkillSlots() {
+  let slots = 0;
+  if (S.career.totalApps >= 20) slots++;
+  if ((S.flags.cupsWon || 0) > 0 || S.career.seasons.some(x => x.award)) slots++;
+  slots += (S.skillSlotsBought || 0);
+  return Math.min(5, slots);
+}
+const BAL_SKILL_SLOT_COST = [{ gp: 5000 }, { gp: 15000 }, { lc: 30 }];
+function skillsScreen() {
+  const slots = balSkillSlots();
+  const pool = BAL_SKILL_POOL[S.pos] || BAL_SKILL_POOL.CF;
+  const learned = S.skills || [];
+  const nextBuy = (S.skillSlotsBought || 0) < 3 ? BAL_SKILL_SLOT_COST[S.skillSlotsBought || 0] : null;
+  setTimeout(() => {
+    document.querySelectorAll("[data-learn]").forEach(b => b.onclick = () => {
+      const sk = b.dataset.learn;
+      if ((S.skills || []).length >= balSkillSlots()) { toast("No free skill slots"); return; }
+      if (S.skills.includes(sk)) return;
+      S.skills.push(sk); save(); toast("\ud83c\udfaf Learned: " + sk); render(skillsScreen);
+    });
+    const buy = $("#buyslot");
+    if (buy) buy.onclick = () => {
+      const cost = BAL_SKILL_SLOT_COST[S.skillSlotsBought || 0];
+      if (!cost) return;
+      if (cost.gp) { if (S.gp < cost.gp) { toast("Not enough GP"); return; } S.gp -= cost.gp; }
+      else { if (S.nl < cost.lc) { toast("Not enough LC"); return; } S.nl -= cost.lc; }
+      S.skillSlotsBought = (S.skillSlotsBought || 0) + 1;
+      save(); toast("\ud83d\udd13 Skill slot unlocked!"); render(skillsScreen);
+    };
+    $("#backhome2").onclick = () => render(homeScreen);
+  }, 0);
+  const effects = { "Outside Curler": "FK curler +18%, shots +4%", "Long Range Drive": "shots +6%, FK power +10%",
+    "First-time Shot": "shots +8%", "Chip Shot Control": "panenka +25%", "Heading": "shots +5%",
+    "Acrobatic Finishing": "shots +7%", "Through Passing": "passes +10%", "Pinpoint Crossing": "FK cross +15%, passes +5%",
+    "One-touch Pass": "passes +8%", "Captaincy": "leadership \u2014 team lift", "Fighting Spirit": "shots & passes +12% when losing after 70'",
+    "Super-sub": "boost when subbed on", "Track Back": "GK saves +2%", "Penalty Specialist": "penalties +12%" };
+  return `<div class="screen">
+    <div class="topbar"><div class="logo"><span class="brand1">PLAYER</span> <span class="legend">SKILLS</span></div>
+      <div class="wallet"><span class="chip">\ud83d\udfe2 ${S.gp} GP</span><span class="chip gold">\ud83e\ude99 ${S.nl} LC</span></div></div>
+    <div class="panel"><h2>\ud83c\udfaf Skills \u00b7 ${learned.length}/${slots} slots used</h2>
+      <p class="sub">Skills honestly change your decision odds \u2014 boosts are baked into the numbers you see in matches.
+      Slot 1: 20 career apps ${S.career.totalApps >= 20 ? "\u2705" : "(" + S.career.totalApps + "/20)"} \u00b7 Slot 2: first trophy/award ${((S.flags.cupsWon || 0) > 0 || S.career.seasons.some(x => x.award)) ? "\u2705" : "\u23f3"} \u00b7 3 more purchasable.</p>
+      ${nextBuy ? `<button class="btn secondary" id="buyslot">\ud83d\udd13 UNLOCK SLOT \u00b7 ${nextBuy.gp ? nextBuy.gp + " GP" : nextBuy.lc + " LC"}</button>` : ""}
+    </div>
+    <div class="panel"><h2>${S.pos} skill pool</h2>
+      ${pool.map(sk => `<div class="kv"><span><b>${sk}</b>${learned.includes(sk) ? ' <span class="badge gold">LEARNED</span>' : ""}<br>
+        <span class="sub">${effects[sk] || ""}</span></span>
+        ${learned.includes(sk) ? "" : `<button class="btn secondary" data-learn="${sk}" ${learned.length >= slots ? "disabled" : ""}>LEARN</button>`}</div>`).join("")}
+    </div>
+    <button class="btn secondary" id="backhome2">\u2b05 BACK</button></div>`;
 }
 
 // ---- Season calendar (FIFA-style: league + cup in one view) ----
@@ -626,17 +812,22 @@ function newsScreen() {
 
 // ---- Home hub (eFootball-style) ----
 function homeScreen() {
+  if (S && S.retired) { balRetire(true); return ""; } // enshrined careers don't play on
+  if (balResolveAbandoned()) toast("\u26a0\ufe0f Abandoned match resolved by simulation.");
+  if (S && janWindowDue()) return janOfferScreen();
   const fx = myNextFixture();
   const claimable = claimableCount();
   setTimeout(() => {
     const go = $("#gomatch"); if (go) go.onclick = () => render(previewScreen);
     const gc = $("#gocup"); if (gc) gc.onclick = () => render(previewScreen);
+    const gt = $("#goct"); if (gt) gt.onclick = () => render(previewScreen);
     const ns = $("#newseason"); if (ns) ns.onclick = startNewSeason;
     document.querySelectorAll("[data-tile]").forEach(t => t.onclick = () => {
       const v = t.dataset.tile;
       if (v === "obj") render(objectivesScreen);
       if (v === "news") render(newsScreen);
       if (v === "train") render(trainScreen);
+      if (v === "skills") render(skillsScreen);
       if (v === "shop") render(shopScreen);
       if (v === "table") render(tableScreen);
       if (v === "career") render(careerScreen);
@@ -645,7 +836,15 @@ function homeScreen() {
     });
   }, 0);
   let hero;
-  if (cupPending()) {
+  const ctFxH = balCtFixture();
+  if (ctFxH) {
+    hero = `<div class="hero cup" id="goct">
+      <div class="hero-label">\ud83c\udf0d CHAMPIONS TROPHY \u00b7 ${ctFxH.ctStage === "group" ? "GROUP MD " + (ctFxH.ctMD + 1) + "/6" : E.CT_ROUNDS[S.ct.koRound].toUpperCase()}</div>
+      <div class="hero-vs">${crest(myClub())}<span class="hero-x">VS</span>${crest(ctFxH.oppClub)}</div>
+      <div class="hero-opp">${ctFxH.oppClub.name}</div>
+      <div class="hero-cta">TAP TO PLAY \u25b6</div>
+    </div>`;
+  } else if (cupPending()) {
     const opp = S.world.clubs[cupOpponent()];
     hero = `<div class="hero cup" id="gocup">
       <div class="hero-label">\ud83c\udfc6 NATIONAL CUP \u00b7 ${CUP_ROUNDS[S.cup.round]}</div>
@@ -680,6 +879,7 @@ function homeScreen() {
       ${tile("obj", "🎯", "Objectives", claimable || "")}
       ${tile("news", "📰", "News")}
       ${tile("train", "💪", "Training", S.sp || "")}
+      ${tile("skills", "🎯", "Skills", (S.skills || []).length < balSkillSlots() ? "!" : "")}
       ${tile("shop", "🛒", "Shop", (S.buff && S.buff.matches) ? "⚡" : "")}
       ${tile("table", "📊", "League")}
       ${tile("career", "⭐", "Career")}
@@ -701,6 +901,22 @@ function homeScreen() {
 function injuredScreen() {
   setTimeout(() => {
     $("#simout").onclick = () => {
+      const ctFx = balCtFixture();
+      if (ctFx) { // CT night plays without you
+        const Hc = ctFx.ctHome ? myClub() : ctFx.oppClub, Ac = ctFx.ctHome ? ctFx.oppClub : myClub();
+        const r = E.simulateMatch(Hc, Ac, { seed: E.hashSeed(S.seed + ":ctout:" + S.season + ":" + (ctFx.ctStage === "group" ? "g" + ctFx.ctMD : "k" + S.ct.koRound)), fast: true });
+        let gH = r.gH, gA = r.gA;
+        if (ctFx.ctStage === "ko" && gH === gA) { if (Math.random() < 0.5) gH++; else gA++; }
+        balCtRecord(ctFx, gH, gA);
+        pushNews("\ud83c\udf0d CT night without the injured " + S.name + ": " + gH + "-" + gA + ".");
+        S.injury--;
+        S.condition = Math.min(100, S.condition + 30);
+        S.trainedToday = false;
+        save();
+        toast(S.injury > 0 ? `Recovering: ${S.injury} more match${S.injury > 1 ? "es" : ""} out` : "\u2705 Fit again!");
+        render(homeScreen);
+        return;
+      }
       const isCup = cupPending();
       if (isCup) { // team plays cup without you
         const oppIdx = cupOpponent();
@@ -722,6 +938,7 @@ function injuredScreen() {
           }
         }
         S.matchday++;
+        balGalaxySim();
       }
       S.injury--;
       S.condition = Math.min(100, S.condition + 30); // rest while out
@@ -745,17 +962,23 @@ function injuredScreen() {
 function previewScreen() {
   if (S.injury > 0) return injuredScreen();
   ensureRole();
-  const isCup = cupPending();
-  const fx = isCup
+  const ctFx = balCtFixture();
+  const isCup = !ctFx && cupPending();
+  const fx = ctFx ? ctFx : isCup
     ? (S.clubIdx === 0 || Math.random() < 0.5 ? { home: S.clubIdx, away: cupOpponent(), cup: true } : { home: cupOpponent(), away: S.clubIdx, cup: true })
     : myNextFixture();
   if (fx && isCup) fx.cup = true;
   if (!fx) return homeScreen();
-  const H = S.world.clubs[fx.home], A = S.world.clubs[fx.away];
+  const capLift = (S.skills || []).includes("Captaincy") ? 0.6 : 0; // must mirror matchScreen exactly
+  const H0 = fx.ct ? (fx.ctHome ? myClub() : fx.oppClub) : S.world.clubs[fx.home];
+  const A0 = fx.ct ? (fx.ctHome ? fx.oppClub : myClub()) : S.world.clubs[fx.away];
+  const meIsHome = fx.ct ? fx.ctHome : fx.home === S.clubIdx;
+  const H = meIsHome && capLift ? Object.assign({}, H0, { str: H0.str + capLift }) : H0;
+  const A = !meIsHome && capLift ? Object.assign({}, A0, { str: A0.str + capLift }) : A0;
   const probs = E.winProbs(H, A, 600);
-  const oppIdx = fx.home === S.clubIdx ? fx.away : fx.home;
+  const oppIdx = fx.ct ? -1 : fx.home === S.clubIdx ? fx.away : fx.home;
   const key = "0v" + oppIdx;
-  const hist = (S.world.h2h[key] || []).slice(-5);
+  const hist = fx.ct ? [] : (S.world.h2h[key] || []).slice(-5);
   const pills = hist.map(m => {
     const myGoals = m.home === S.clubIdx ? m.gH : m.gA;
     const opGoals = m.home === S.clubIdx ? m.gA : m.gH;
@@ -780,11 +1003,11 @@ function previewScreen() {
 
   return `<div class="screen">${topbar()}
     <div class="panel">
-      <h2>${fx.cup ? "\ud83c\udfc6 CUP " + CUP_ROUNDS[S.cup.round] : "Match Preview \u00b7 MD " + (S.matchday + 1)}</h2>
+      <h2>${fx.ct ? (fx.ctStage === "group" ? "\ud83c\udf0d CHAMPIONS TROPHY \u00b7 Group MD " + (fx.ctMD + 1) + "/6" : "\ud83c\udf0d CHAMPIONS TROPHY \u00b7 " + E.CT_ROUNDS[S.ct.koRound]) : fx.cup ? "\ud83c\udfc6 CUP " + CUP_ROUNDS[S.cup.round] : "Match Preview \u00b7 MD " + (S.matchday + 1)}</h2>
       <div class="vsrow">
-        <div class="vsteam">${crest(H)}<div class="tname">${H.name}</div><div class="sub">${posOf(fx.home)} in league</div></div>
+        <div class="vsteam">${crest(H)}<div class="tname">${H.name}</div><div class="sub">${fx.ct ? "str " + H.str : posOf(fx.home) + " in league"}</div></div>
         <div class="vsx">VS</div>
-        <div class="vsteam">${crest(A)}<div class="tname">${A.name}</div><div class="sub">${posOf(fx.away)} in league</div></div>
+        <div class="vsteam">${crest(A)}<div class="tname">${A.name}</div><div class="sub">${fx.ct ? "str " + A.str : posOf(fx.away) + " in league"}</div></div>
       </div>
       <p class="sub center" style="margin-bottom:4px">Win probability (live engine odds — never rigged)</p>
       <div class="probbar">
@@ -795,10 +1018,10 @@ function previewScreen() {
       <div class="problabels"><span>${H.short} win</span><span>Draw</span><span>${A.short} win</span></div>
     </div>
     <div class="panel">
-      <h2>Head to Head vs ${S.world.clubs[oppIdx].short}</h2>
+      <h2>Head to Head vs ${fx.ct ? fx.oppClub.short : S.world.clubs[oppIdx].short}</h2>
       <div class="h2hrow">${pills || '<span class="sub">First meeting</span>'}</div>
       <div class="kv"><span>Your team form</span><b>${lastFive}</b></div>
-      <div class="kv"><span>Venue</span><b>${fx.home === S.clubIdx ? "🏟 Home" : "✈️ Away"}</b></div>
+      <div class="kv"><span>Venue</span><b>${fx.ct && fx.ctStage === "ko" ? "🌍 Neutral ground" : meIsHome ? "🏟 Home" : "✈️ Away"}</b></div>
       <div class="kv"><span>Team strength</span><b>${H.short} ${H.str} · ${A.short} ${A.str}</b></div>
     </div>
     <div class="panel">
@@ -847,21 +1070,37 @@ function ensureRole() {
 }
 function matchScreen(fx, displayedProbs) {
   ensureRole();
-  const H = S.world.clubs[fx.home], A = S.world.clubs[fx.away];
-  const isHome = fx.home === S.clubIdx;
-  const seed = E.hashSeed(S.seed + ":s" + S.season + ":md" + S.matchday);
+  const capLift = (S.skills || []).includes("Captaincy") ? 0.6 : 0;
+  const H0 = fx.ct ? (fx.ctHome ? myClub() : fx.oppClub) : S.world.clubs[fx.home];
+  const A0 = fx.ct ? (fx.ctHome ? fx.oppClub : myClub()) : S.world.clubs[fx.away];
+  const isHome = fx.ct ? fx.ctHome : fx.home === S.clubIdx;
+  const H = isHome && capLift ? Object.assign({}, H0, { str: H0.str + capLift }) : H0;
+  const A = !isHome && capLift ? Object.assign({}, A0, { str: A0.str + capLift }) : A0;
+  const seed = E.hashSeed(S.seed + ":s" + S.season + ":md" + S.matchday + (fx.ct ? (fx.ctStage === "group" ? ":ctg" + fx.ctMD : ":ctko" + S.ct.koRound) : ""));
   const isGK = S.pos === "GK";
   const match = E.createMatch(H, A, {
-    seed, player: { pos: S.pos, playstyle: S.playstyle, eff: effStats() }, playerTeam: isHome ? 0 : 1, role: S.role,
+    seed, player: { pos: S.pos, playstyle: S.playstyle, eff: effStats(), skills: S.skills || [] }, playerTeam: isHome ? 0 : 1, role: S.role,
     condition: S.condition, fitLvl: S.upgrades.fitness, medLvl: S.upgrades.medical
   });
 
+  const matchKey = fx.ct ? (fx.ctStage === "group" ? `s${S.season}:ctg${fx.ctMD}` : `s${S.season}:ctko${S.ct.koRound}`)
+                 : fx.cup ? `s${S.season}:cup${S.cup.round}` : `s${S.season}:md${S.matchday}`;
   let speed = 1, timer = null, decisionTimer = null;
   let momentActive = false;
   let viewMode = S.viewMode || "ticker"; // "ticker" | "live2d"
   const mstat = { shotsH: 0, shotsA: 0, sotH: 0, sotA: 0 };
 
   setTimeout(() => {
+    // ---- anti-replay: a match is consumed the moment it kicks off ----
+    S.playedKeys = S.playedKeys || [];
+    if (S.playedKeys.includes(matchKey)) { // back-navigation into an already-played match
+      toast("\u26a0\ufe0f That match is already in the books.");
+      render(homeScreen); return;
+    }
+    S.playedKeys.push(matchKey); if (S.playedKeys.length > 60) S.playedKeys.shift();
+    S.mdLock = fx.ct ? { key: matchKey, ct: true, ctStage: fx.ctStage, ctMD: fx.ctMD, ctX: fx.ctX, ctY: fx.ctY, ctHome: fx.ctHome, opp: fx.opp, koPre: fx.koPre || null }
+              : { key: matchKey, home: fx.home, away: fx.away, cup: !!fx.cup };
+    save();
     const tickEl = $("#ticker"), clockEl = $("#clock"), scoreEl = $("#score"), momEl = $("#momfill");
     const decEl = $("#decision");
     const canvas = $("#pitch"), ctx = canvas.getContext("2d");
@@ -1838,7 +2077,7 @@ function matchScreen(fx, displayedProbs) {
         setTimeout(() => toast("\u23f8 Match is PAUSED \u2014 take your time. Every % is the true probability. \ud83d\udee1 HOLD trades this chance for a better one."), 300);
       }
       clearInterval(timer); timer = null; // HARD PAUSE — match time frozen until player chooses
-      const odds = E.decisionOdds(dec, { pos: S.pos, playstyle: S.playstyle, eff: effStats() }, S.role);
+      const odds = E.decisionOdds(dec, { pos: S.pos, playstyle: S.playstyle, eff: effStats(), skills: S.skills || [] }, S.role);
       let scenLabel, buttons;
       if (dec.type === "penalty") {
         scenLabel = "\u26a0\ufe0f PENALTY! You step up to the spot...";
@@ -1863,7 +2102,7 @@ function matchScreen(fx, displayedProbs) {
         scenLabel = (dec.held ? "\ud83d\udee1\ufe0f\u2794 HOLD BONUS ACTIVE \u2014 " : "") + (dec.scen ? dec.scen.label : "A chance opens up");
         if (dec.held) {
           // show the boost honestly: same chance without the hold multiplier
-          const pre = E.decisionOdds(Object.assign({}, dec, { conv: dec.conv / 1.30 }), { pos: S.pos, playstyle: S.playstyle, eff: effStats() }, S.role);
+          const pre = E.decisionOdds(Object.assign({}, dec, { conv: dec.conv / 1.30 }), { pos: S.pos, playstyle: S.playstyle, eff: effStats(), skills: S.skills || [] }, S.role);
           buttons = [["shoot", "\ud83c\udfaf SHOOT \u00b7 SHO", `<b style="color:var(--gold)">${odds.shoot}%</b> goal <s style="opacity:.6">${pre.shoot}%</s>`],
                      ["pass", "\ud83c\udd70\ufe0f PASS \u00b7 PAS", `<b style="color:var(--gold)">${odds.pass}%</b> assist <s style="opacity:.6">${pre.pass}%</s>`],
                      ["hold", "\ud83d\udee1\ufe0f HOLD \u00b7 DRI+PHY", odds.hold + "% keep again"]];
@@ -2001,10 +2240,11 @@ function matchScreen(fx, displayedProbs) {
 
 // ---- Post-match: rewards, card events, progression ----
 function finishMatch(fx, result, displayedProbs) {
-  const isHome = fx.home === S.clubIdx;
+  S.mdLock = null; // committed: quitting/back can no longer touch this result
+  const isHome = fx.ct ? fx.ctHome : fx.home === S.clubIdx;
   let my = isHome ? result.gH : result.gA, op = isHome ? result.gA : result.gH;
-  if (fx.cup && my === op) { // cup ties go to penalties (honest coin-ish flip weighted by strength)
-    const meStr = myClub().str, opStr = S.world.clubs[isHome ? fx.away : fx.home].str;
+  if ((fx.cup || (fx.ct && fx.ctStage === "ko")) && my === op) { // ties go to penalties (honest, strength-weighted)
+    const meStr = myClub().str, opStr = fx.ct ? fx.oppClub.str : S.world.clubs[isHome ? fx.away : fx.home].str;
     const pWin = meStr / (meStr + opStr);
     if (Math.random() < pWin) my++; else op++;
     result.pens = true;
@@ -2012,6 +2252,11 @@ function finishMatch(fx, result, displayedProbs) {
   const res = my > op ? "W" : my === op ? "D" : "L";
   S.lastFive.push(res); if (S.lastFive.length > 5) S.lastFive.shift();
 
+  let ctReward = null;
+  if (fx.ct) { // Champions Trophy night — does not touch the league calendar
+    const gH2 = isHome ? my : op, gA2 = isHome ? op : my; // pens-adjusted for KO
+    ctReward = balCtRecord(fx, gH2, gA2);
+  }
   if (fx.cup) {
     if (res === "W") {
       const rw = [[300, 0], [500, 5], [1000, 15]][S.cup.round];
@@ -2025,9 +2270,9 @@ function finishMatch(fx, result, displayedProbs) {
     }
   }
   // record my club result + sim rest of the matchday (league only)
-  if (!fx.cup) S.results.push({ home: fx.home, away: fx.away, gH: result.gH, gA: result.gA });
-  const oppIdx = isHome ? fx.away : fx.home;
-  if (!fx.cup) {
+  if (!fx.cup && !fx.ct) S.results.push({ home: fx.home, away: fx.away, gH: result.gH, gA: result.gA });
+  const oppIdx = fx.ct ? -1 : isHome ? fx.away : fx.home;
+  if (!fx.cup && !fx.ct) {
     const key = "0v" + oppIdx;
     (S.world.h2h[key] = S.world.h2h[key] || []).push({ home: fx.home, away: fx.away, gH: result.gH, gA: result.gA });
     for (const [h, a] of S.world.fixtures[S.matchday]) {
@@ -2036,6 +2281,7 @@ function finishMatch(fx, result, displayedProbs) {
       S.results.push({ home: h, away: a, gH: r.gH, gA: r.gA });
     }
     S.matchday++;
+    balGalaxySim(); // the other five leagues play their matchday too
   }
 
   // player progression
@@ -2090,7 +2336,7 @@ function finishMatch(fx, result, displayedProbs) {
   // golden boot race: my goals + generated rival strikers score alongside
   S.scorers[S.name] = (S.scorers[S.name] || 0) + result.pGoals;
   try { titleRaceNews(); } catch (e) {}
-  for (const rr of S.results.slice(-(S.world.fixtures[S.matchday - 1] || []).length)) {
+  for (const rr of (fx.ct ? [] : S.results.slice(-(S.world.fixtures[S.matchday - 1] || []).length))) {
     const total = rr.gH + rr.gA;
     for (let g = 0; g < total; g++) {
       if (Math.random() < 0.4) {
@@ -2103,7 +2349,7 @@ function finishMatch(fx, result, displayedProbs) {
   }
 
   // news headlines
-  const oppName = S.world.clubs[oppIdx].name;
+  const oppName = fx.ct ? fx.oppClub.name : S.world.clubs[oppIdx].name;
   if (result.pGoals >= 3) pushNews(`🎩 ${S.name} destroys ${oppName} with a HAT-TRICK!`);
   else if (result.pGoals >= 1 && res === "W") pushNews(`⚽ ${S.name} strikes as ${myClub().name} beat ${oppName} ${Math.max(my, op)}-${Math.min(my, op)}.`);
   else if (r >= 8.5) pushNews(`🌟 ${r.toFixed(1)}-rated masterclass from ${S.name} against ${oppName}.`);
@@ -2115,7 +2361,8 @@ function finishMatch(fx, result, displayedProbs) {
 
   render(() => {
     setTimeout(() => { $("#cont").onclick = () => render(homeScreen); }, 0);
-    const H = S.world.clubs[fx.home], A = S.world.clubs[fx.away];
+    const H = fx.ct ? (fx.ctHome ? myClub() : fx.oppClub) : S.world.clubs[fx.home];
+    const A = fx.ct ? (fx.ctHome ? fx.oppClub : myClub()) : S.world.clubs[fx.away];
     return `<div class="screen">${topbar()}
       <div class="panel center">
         <h2>Full Time</h2>
@@ -2131,11 +2378,12 @@ function finishMatch(fx, result, displayedProbs) {
         ${fmtRating(r)}
         <div class="rewardrow">
           ${S.pos === "GK"
-            ? `<div><b>${result.pSaves}</b><span>SAVES</span></div><div><b>${(fx.home === S.clubIdx ? result.gA : result.gH) === 0 ? "YES" : "NO"}</b><span>CLEAN SHEET</span></div>`
+            ? `<div><b>${result.pSaves}</b><span>SAVES</span></div><div><b>${(isHome ? result.gA : result.gH) === 0 ? "YES" : "NO"}</b><span>CLEAN SHEET</span></div>`
             : `<div><b>${result.pGoals}</b><span>GOALS</span></div><div><b>${result.pAssists}</b><span>ASSISTS</span></div><div><b>${result.pShots}</b><span>SHOTS</span></div>`}
           ${result.pTackles ? `<div><b>${result.pTackles}</b><span>TACKLES</span></div>` : ""}
         </div>
         ${cardEvent ? `<div class="cardevent">${cardEvent}</div>` : ""}
+        ${fx.ct && ctReward && (ctReward.gp || ctReward.lc) ? `<div class="cardevent">\ud83c\udf0d Champions Trophy: +${ctReward.gp} GP${ctReward.lc ? " \u00b7 +" + ctReward.lc + " LC" : ""}</div>` : ""}
         <div class="rewardrow">
           <div><b style="color:${S.condition > 60 ? 'var(--green)' : 'var(--red)'}">${S.condition}%</b><span>CONDITION</span></div>
           <div><b style="color:var(--green)">+${gpGain}</b><span>GP</span></div>
@@ -2151,9 +2399,47 @@ function finishMatch(fx, result, displayedProbs) {
 // ---- League table ----
 function tableScreen() {
   const t = E.computeTable(S.world.clubs, S.results);
+  const worldView = S._worldLg != null && S.galaxy && S._worldLg !== S.leagueIdx;
+  setTimeout(() => {
+    document.querySelectorAll("[data-worldlg]").forEach(b => b.onclick = () => { S._worldLg = +b.dataset.worldlg; render(tableScreen); });
+  }, 0);
+  const worldTabs = S.galaxy ? `<div class="viewrow" style="flex-wrap:wrap;gap:4px;margin-bottom:6px">
+    ${S.galaxy.leagues.map((L, li) => `<button class="btn secondary ${((S._worldLg == null ? S.leagueIdx : S._worldLg) === li) ? "on" : ""}" data-worldlg="${li}" style="flex:1 1 30%;font-size:.72rem;padding:6px 4px">${L.name.split(" ")[0]}${li === S.leagueIdx ? " ⭐" : ""}</button>`).join("")}
+  </div>` : "";
+  if (worldView) {
+    const L = S.galaxy.leagues[S._worldLg];
+    const wt = E.computeTable(L.clubs, L.results || []);
+    return `<div class="screen">${topbar()}
+      <div class="panel">
+        <h2>🌍 ${L.name} · Season ${S.season}</h2>
+        ${worldTabs}
+        <table class="league">
+          <tr><th>#</th><th>Club</th><th>P</th><th>W</th><th>D</th><th>L</th><th>GD</th><th>Pts</th></tr>
+          ${wt.map((r, i) => `<tr><td>${i + 1}</td><td>${r.name}</td><td>${r.P}</td><td>${r.W}</td><td>${r.D}</td><td>${r.L}</td><td>${r.GF - r.GA}</td><td><b>${r.Pts}</b></td></tr>`).join("")}
+        </table>
+        <p class="sub" style="margin-top:6px">League champions qualify for next season's 🌍 Champions Trophy (top-3 leagues send two).</p>
+      </div>
+      ${navHTML("table")}
+    </div>`;
+  }
+  const ctPanel = (S.ct && S.ct.myG >= 0) ? (() => {
+    const gt = E.ctGroupTable(S.ct, S.ct.myG);
+    const meE = balCtMyEntry();
+    return `<div class="panel">
+      <h2>🌍 Champions Trophy · Group ${"ABCD"[S.ct.myG]}</h2>
+      ${S.ct.stage === "group" ? `<table class="league">
+        <tr><th>#</th><th>Club</th><th>P</th><th>GD</th><th>Pts</th></tr>
+        ${gt.map((r, i) => { const e2 = S.ct.groups[S.ct.myG][r.s]; const c = E.ctClub(S.galaxy, e2); const isMe = e2.league === meE.league && e2.club === meE.club;
+          return `<tr class="${isMe ? "you" : ""}"><td>${i + 1}</td><td>${c.name}</td><td>${r.P}</td><td>${r.GD}</td><td><b>${r.Pts}</b></td></tr>`; }).join("")}
+      </table><p class="sub" style="margin-top:6px">Top two advance · group matches ${S.ct.gPlayed}/6 played.</p>`
+      : S.ct.done ? `<p class="sub">${S.ct.champion ? E.ctClub(S.galaxy, S.ct.champion).name + " won the trophy." : "Tournament complete."}</p>`
+      : `<p class="sub">Knockout stage · ${E.CT_ROUNDS[S.ct.koRound]} ${S.ct.alive ? "— you're still in it!" : "— you're out."}</p>`}
+    </div>`;
+  })() : "";
   return `<div class="screen">${topbar()}
     <div class="panel">
       <h2>${leagueName()} · Season ${S.season}</h2>
+      ${worldTabs}
       <table class="league">
         <tr><th>#</th><th>Club</th><th>P</th><th>W</th><th>D</th><th>L</th><th>GD</th><th>Pts</th></tr>
         ${t.map((r, i) => `<tr class="${r.i === S.clubIdx ? "you" : ""}">
@@ -2161,6 +2447,7 @@ function tableScreen() {
         </tr>`).join("")}
       </table>
     </div>
+    ${ctPanel}
     <div class="panel">
       <h2>👑 Golden Boot Race</h2>
       ${Object.entries(S.scorers).sort((x, y) => y[1] - x[1]).slice(0, 5).map(([n, g], i) =>
@@ -2385,6 +2672,50 @@ function shopScreen() {
 }
 
 // ---- Career ----
+function balRetire(forced) {
+  const avg = S.career.seasons.length ? (S.career.seasons.reduce((a, s2) => a + (+s2.avg || 0), 0) / S.career.seasons.length).toFixed(2) : "\u2014";
+  const hof = { v: 1, t: Date.now(), name: S.name, pos: S.pos, region: S.region, age: S.age,
+    seasons: S.career.seasons.length, apps: S.career.totalApps, goals: S.career.totalGoals,
+    avg, level: S.level, rep: S.rep,
+    titles: S.career.seasons.filter(s2 => s2.pos === 1).length,
+    cups: S.flags.cupsWon || 0, cts: S.flags.ctsWon || 0,
+    boots: S.career.seasons.filter(s2 => (s2.award || "").includes("GOLDEN BOOT")).length,
+    lastClub: myClub().name };
+  const hall = (() => { try { return JSON.parse(localStorage.getItem("flHallOfFame") || "[]"); } catch (e) { return []; } })();
+  if (!S.retired) { // enshrine exactly once — re-rendering the farewell screen must not duplicate
+    hall.unshift(hof);
+    localStorage.setItem("flHallOfFame", JSON.stringify(hall.slice(0, 20)));
+    if (window.flMirror) flMirror("flHallOfFame", JSON.stringify(hall.slice(0, 20)));
+  }
+  S.retired = true; save();
+  render(() => {
+    setTimeout(() => {
+      const nb = $("#hofnew"); if (nb) nb.onclick = () => { localStorage.removeItem(SAVE_KEY); flMirror(SAVE_KEY, null); S = null; render(createScreen); };
+      const mb = $("#hofmenu"); if (mb) mb.onclick = () => render(menuScreen);
+    }, 0);
+    return `<div class="screen">
+      <div class="topbar"><div class="logo"><span class="brand1">HALL OF</span> <span class="legend">FAME</span></div></div>
+      <div class="panel center">
+        <h1>\ud83c\udfdf\ufe0f ${forced ? "THE FINAL WHISTLE" : "A LEGEND BOWS OUT"}</h1>
+        <p class="sub" style="margin:8px 0">${S.name} retires at <b>${S.age}</b>${forced ? " \u2014 the body says enough" : " \u2014 on their own terms"}. The crowd rises as one.</p>
+      </div>
+      <div class="panel">
+        <h2>\ud83d\udcdc Career of ${S.name}</h2>
+        <div class="kv"><span>Seasons</span><b>${hof.seasons}</b></div>
+        <div class="kv"><span>Apps / Goals</span><b>${hof.apps} / ${hof.goals}</b></div>
+        <div class="kv"><span>Career avg rating</span><b>${hof.avg}</b></div>
+        <div class="kv"><span>\ud83c\udfc6 League titles</span><b>${hof.titles}</b></div>
+        <div class="kv"><span>\ud83c\udfc6 Cups</span><b>${hof.cups}</b></div>
+        <div class="kv"><span>\ud83c\udf0d Champions Trophies</span><b>${hof.cts}</b></div>
+        <div class="kv"><span>\ud83d\udc5f Golden Boots</span><b>${hof.boots}</b></div>
+        <div class="kv"><span>Final club</span><b>${hof.lastClub}</b></div>
+        <p class="sub" style="margin-top:6px">Enshrined in the Hall of Fame forever \u2014 view retired legends from the Career screen of any future save.</p>
+        <button class="btn" id="hofnew">\u2b50 START A NEW LEGEND</button>
+        <button class="btn secondary" id="hofmenu">MAIN MENU</button>
+      </div>
+    </div>`;
+  });
+}
 function careerScreen() {
   setTimeout(() => {
     const nc = $("#newcareer");
@@ -2400,15 +2731,33 @@ function careerScreen() {
     };
   }, 0);
   const avg = S.myStats.ratings.length ? (S.myStats.ratings.reduce((a, b) => a + b, 0) / S.myStats.ratings.length).toFixed(2) : "—";
+  const hall = (() => { try { return JSON.parse(localStorage.getItem("flHallOfFame") || "[]"); } catch (e) { return []; } })();
+  setTimeout(() => {
+    const rb = $("#retirebtn");
+    if (rb) rb.onclick = () => {
+      if (rb.dataset.armed) { balRetire(false); }
+      else {
+        rb.dataset.armed = "1"; rb.textContent = "\u26a0\ufe0f Tap again \u2014 " + S.name + " retires FOREVER";
+        setTimeout(() => { const b = $("#retirebtn"); if (b) { b.dataset.armed = ""; b.textContent = "\ud83d\udc4b RETIRE (age " + S.age + ")"; } }, 4000);
+      }
+    };
+  }, 0);
   return `<div class="screen">${topbar()}
     ${playerCardHTML(true)}
     <div class="panel">
       <h2>Career</h2>
+      <div class="kv"><span>Age</span><b>${S.age || "?"}${(S.age || 17) >= 41 ? " \u23f3 (forced retirement at 45)" : ""}</b></div>
       <div class="kv"><span>Reputation</span><b>${S.rep}</b></div>
       <div class="kv"><span>Career apps / goals</span><b>${S.career.totalApps} / ${S.career.totalGoals}</b></div>
       <div class="kv"><span>Season ${S.season} avg rating</span><b>${avg}</b></div>
       <div class="kv"><span>Card</span><b>${cardLabel()}${S.cardTimer ? ` (${S.cardTimer} matches left)` : ""}</b></div>
+      ${(S.age || 17) >= 35 ? `<button class="btn secondary" id="retirebtn" style="margin-top:6px">\ud83d\udc4b RETIRE (age ${S.age})</button>
+      <p class="sub">From 35 the choice is yours \u2014 at 45 it's made for you.</p>` : ""}
     </div>
+    ${hall.length ? `<div class="panel">
+      <h2>\ud83c\udfdb Hall of Fame</h2>
+      ${hall.map(h => `<div class="kv"><span>\u2b50 ${h.name} <span class="sub">(${h.pos}, retired ${h.age})</span></span><b>${h.goals} goals \u00b7 ${h.titles}\ud83c\udfc6 ${h.cts ? h.cts + "\ud83c\udf0d" : ""}</b></div>`).join("")}
+    </div>` : ""}
     ${S.career.seasons.map(s => `<div class="panel">
       <h2>Season ${s.n} · ${s.club}</h2>
       <div class="kv"><span>Finished</span><b>#${s.pos}</b></div>
@@ -2425,8 +2774,65 @@ function careerScreen() {
   </div>`;
 }
 
+// ---- abandoned match resolution (quit mid-match => sim result stands, no rewards) ----
+function balResolveAbandoned() {
+  if (!S || !S.mdLock) return false;
+  const L = S.mdLock; S.mdLock = null;
+  if (L.ct) { // abandoned Champions Trophy match — simulated, result stands
+    const fx = { ct: true, ctStage: L.ctStage, ctMD: L.ctMD, ctX: L.ctX, ctY: L.ctY, ctHome: L.ctHome, opp: L.opp,
+                 oppClub: E.ctClub(S.galaxy, L.opp), koPre: L.koPre };
+    const Hc = L.ctHome ? myClub() : fx.oppClub, Ac = L.ctHome ? fx.oppClub : myClub();
+    const r = E.simulateMatch(Hc, Ac, { seed: E.hashSeed(S.seed + ":aband:" + L.key), fast: true });
+    let gH = r.gH, gA = r.gA;
+    if (L.ctStage === "ko" && gH === gA) { if (Math.random() < 0.5) gH++; else gA++; } // pens
+    balCtRecord(fx, gH, gA);
+    const my2 = L.ctHome ? gH : gA, op2 = L.ctHome ? gA : gH;
+    S.lastFive.push(my2 > op2 ? "W" : my2 === op2 ? "D" : "L"); if (S.lastFive.length > 5) S.lastFive.shift();
+    pushNews("\u26a0\ufe0f You left the touchline mid-match. The CT tie finished " + gH + "-" + gA + " without your input.");
+    save();
+    return true;
+  }
+  const fx = { home: L.home, away: L.away, cup: L.cup };
+  const r = E.simulateMatch(S.world.clubs[fx.home], S.world.clubs[fx.away],
+    { seed: E.hashSeed(S.seed + ":aband:" + L.key), fast: true });
+  const isHome = fx.home === S.clubIdx;
+  let my = isHome ? r.gH : r.gA, op = isHome ? r.gA : r.gH;
+  if (fx.cup) {
+    if (my === op) { if (Math.random() < 0.5) my++; else op++; }
+    if (my > op) S.cup.round++; else S.cup.alive = false;
+    if (S.cup.round >= 3 && S.cup.alive) { S.flags.cupWinner = true; S.flags.cupsWon = (S.flags.cupsWon || 0) + 1; }
+  } else {
+    S.results.push({ home: fx.home, away: fx.away, gH: r.gH, gA: r.gA });
+    for (const [h, a2] of (S.world.fixtures[S.matchday] || [])) {
+      if (h === S.clubIdx || a2 === S.clubIdx) continue;
+      const rr = E.simulateMatch(S.world.clubs[h], S.world.clubs[a2], { seed: E.hashSeed(S.seed + S.season + "md" + S.matchday + h + a2), fast: true });
+      S.results.push({ home: h, away: a2, gH: rr.gH, gA: rr.gA });
+    }
+    S.matchday++;
+    balGalaxySim();
+  }
+  S.lastFive.push(my > op ? "W" : my === op ? "D" : "L"); if (S.lastFive.length > 5) S.lastFive.shift();
+  pushNews("\u26a0\ufe0f You left the touchline mid-match. It finished " + r.gH + "-" + r.gA + " without your input.");
+  save();
+  return true;
+}
+
 // ---- Season rollover + transfers ----
+function balSwitchLeague(li, ci, midSeason) { // cross-league move within the galaxy
+  if (!S.galaxy) return;
+  S.galaxy.leagues[S.leagueIdx].results = (S.results || []).slice(); // hand my league back to the sim
+  S.leagueIdx = li; S.clubIdx = ci;
+  const L = S.galaxy.leagues[li];
+  S.world = { tier: S.tier, clubs: L.clubs, fixtures: L.fixtures, h2h: {} };
+  if (midSeason) { S.results = (L.results || []).slice(); S.lastFive = []; }
+}
 function startNewSeason() {
+  if (S.galaxy && S.ct && S.ct.alive && !S.ct.done && balCtFixture()) { toast("\ud83c\udf0d Champions Trophy still live \u2014 play your CT tie first!"); render(previewScreen); return; }
+  if (S.galaxy) { // close out the world season BEFORE transfers/rollover
+    balGalaxySim();
+    S.galaxy.leagues[S.leagueIdx].results = (S.results || []).slice();
+    S.pendingQual = E.galaxyRollover(S.galaxy, S.seed, S.season);
+  }
   const t = E.computeTable(S.world.clubs, S.results);
   const myPos = t.findIndex(r => r.i === S.clubIdx) + 1;
   const avg = S.myStats.ratings.length ? S.myStats.ratings.reduce((a, b) => a + b, 0) / S.myStats.ratings.length : 6;
@@ -2445,19 +2851,217 @@ function startNewSeason() {
   });
   // transfer offer: strong season in tier 0 → move to Euro league
   const transferBar = S.transferRequest ? (avg >= 6.6 || S.myStats.goals >= 9) : (avg >= 7.2 || S.myStats.goals >= 15);
-  if (S.tier === 0 && transferBar && (S.season >= (S.upgrades.agentNet ? 1 : 2) || S.transferRequest)) {
+  // aging: gentle decline from 35 (−1 to two random stats/season), legendary card holds the line
+  if ((S.age || 17) >= 35 && S.cardType !== "legendary") {
+    const keys = Object.keys(S.stats);
+    for (let i = 0; i < 2; i++) {
+      const k = keys[Math.floor(Math.random() * keys.length)];
+      S.stats[k] = Math.max(40, S.stats[k] - 1);
+    }
+    pushNews("\u23f3 Age " + (S.age + 1) + " next season \u2014 the legs lose a step (\u22121 to two stats). Training can fight it.");
+  }
+  if (S.galaxy && transferBar && (S.season >= (S.upgrades.agentNet ? 1 : 2) || S.transferRequest)) {
     render(() => transferOfferScreen(avg, myPos));
     return;
   }
-  S.world = E.makeWorld(S.tier, S.seed + ":s" + (S.season + 1), S.region);
   if (award) toast("Big Time season!");
   finishSeasonRollover();
+}
+
+// ============================ GIFTS: scheduled events + redeem codes ============================
+const FL_GIFT_EVENTS = [ // date-based, offline, same for every player (shipped in updates)
+  { id: "worldupdate26", from: "2026-09-01", to: "2026-09-30", title: "\ud83c\udf0d World Update Celebration",
+    gp: 1500, lc: 15, mlgp: 3, mllc: 15 },
+  { id: "xmas26", from: "2026-12-18", to: "2027-01-05", title: "\ud83c\udf84 Festive Gift",
+    gp: 2000, lc: 20, mlgp: 4, mllc: 20, pl: { name: "Noel Santana", pos: "FW", ovr: 86, card: "showtime" } }
+];
+function flGiftClaimed() { try { return JSON.parse(localStorage.getItem("flGiftsClaimed") || "[]"); } catch (e) { return []; } }
+function flGiftMarkClaimed(id) {
+  const c = flGiftClaimed(); if (!c.includes(id)) c.push(id);
+  localStorage.setItem("flGiftsClaimed", JSON.stringify(c)); if (window.flMirror) flMirror("flGiftsClaimed", JSON.stringify(c));
+}
+function flGiftsLive() {
+  const now = new Date().toISOString().slice(0, 10);
+  return FL_GIFT_EVENTS.filter(g => now >= g.from && now <= g.to && !flGiftClaimed().includes(g.id));
+}
+function flQueueMlGift(g) { // ML applies it on next ML.enter()
+  try {
+    const q = JSON.parse(localStorage.getItem("flMlGifts") || "[]");
+    q.push(g);
+    localStorage.setItem("flMlGifts", JSON.stringify(q)); if (window.flMirror) flMirror("flMlGifts", JSON.stringify(q));
+  } catch (e) {}
+}
+function flApplyGift(g) { // BaL part instantly, ML part queued
+  if (S && !S.retired) {
+    if (g.gp) S.gp += g.gp;
+    if (g.lc) S.nl += g.lc;
+    if (g.gp || g.lc) pushNews("\ud83c\udf81 " + (g.title || "Gift") + ": +" + (g.gp || 0) + " GP, +" + (g.lc || 0) + " LC!");
+    save();
+  }
+  if (g.mlgp || g.mllc || g.pl) flQueueMlGift({ id: g.id, title: g.title, mlgp: g.mlgp, mllc: g.mllc, pl: g.pl });
+  flGiftMarkClaimed(g.id);
+}
+// Redeem codes: TEMPLATE-SERIAL-CHECK, verified offline via hash; single-use per save
+const FL_CODE_SECRET = "flgift-s3cr3t-2026";
+const FL_CODE_TEMPLATES = {
+  WELCOME26: { title: "Welcome Pack", gp: 1000, lc: 10, mlgp: 2, mllc: 10 },
+  STRIKER26: { title: "\ud83c\udf81 Event Striker", mllc: 5, pl: { name: "Ade Blackwood", pos: "FW", ovr: 87, card: "showtime" } },
+  KEEPER26:  { title: "\ud83c\udf81 Event Keeper", mllc: 5, pl: { name: "Viktor Hale", pos: "GK", ovr: 86, card: "bigtime" } },
+  MEGA26:    { title: "\ud83d\udc8e Mega Pack", gp: 3000, lc: 30, mlgp: 6, mllc: 30 }
+};
+function flRedeem(codeRaw) {
+  const code = (codeRaw || "").trim().toUpperCase();
+  const parts = code.split("-");
+  if (parts.length !== 3) return { ok: false, msg: "Format: TEMPLATE-SERIAL-CHECK" };
+  const [tpl, serial, chk] = parts;
+  const t = FL_CODE_TEMPLATES[tpl];
+  if (!t) return { ok: false, msg: "Unknown code" };
+  const want = (E.hashSeed(tpl + "-" + serial + "-" + FL_CODE_SECRET) >>> 0).toString(36).slice(0, 4).toUpperCase();
+  if (chk !== want) return { ok: false, msg: "Invalid code" };
+  const used = (() => { try { return JSON.parse(localStorage.getItem("flCodesUsed") || "[]"); } catch (e) { return []; } })();
+  if (used.includes(code)) return { ok: false, msg: "Code already redeemed on this device" };
+  used.push(code);
+  localStorage.setItem("flCodesUsed", JSON.stringify(used)); if (window.flMirror) flMirror("flCodesUsed", JSON.stringify(used));
+  flApplyGift(Object.assign({ id: "code:" + code }, t));
+  return { ok: true, msg: t.title };
+}
+function giftsScreen() {
+  const live = flGiftsLive();
+  setTimeout(() => {
+    document.querySelectorAll("[data-claimg]").forEach(b => b.onclick = () => {
+      const g = FL_GIFT_EVENTS.find(x => x.id === b.dataset.claimg);
+      if (!g) return;
+      flApplyGift(g);
+      toast("\ud83c\udf81 " + g.title + " claimed!" + (g.pl || g.mlgp || g.mllc ? " ML rewards arrive when you open Master League." : ""));
+      render(giftsScreen);
+    });
+    const rd = $("#redeembtn"); if (rd) rd.onclick = () => {
+      const r = flRedeem($("#redeemin").value);
+      toast(r.ok ? "\u2705 Redeemed: " + r.msg : "\u274c " + r.msg);
+      if (r.ok) { $("#redeemin").value = ""; render(giftsScreen); }
+    };
+    $("#giftback").onclick = () => render(menuScreen);
+  }, 0);
+  return `<div class="screen">
+    <div class="topbar"><div class="logo"><span class="brand1">GIFTS &</span> <span class="legend">EVENTS</span></div></div>
+    <div class="panel">
+      <h2>\ud83c\udf81 Live Events</h2>
+      ${live.length ? live.map(g => `<div class="kv"><span>${g.title}<br><span class="sub">until ${g.to}${g.pl ? " \u00b7 includes " + g.pl.name + " (" + g.pl.ovr + ")" : ""}</span></span><button class="btn" data-claimg="${g.id}" style="width:auto;padding:8px 14px">CLAIM</button></div>`).join("")
+        : '<p class="sub">No live events right now \u2014 new gifts arrive with updates and special dates. Check back!</p>'}
+      ${flGiftClaimed().length ? `<p class="sub" style="margin-top:6px">\u2705 Claimed: ${flGiftClaimed().filter(i => !i.startsWith("code:")).length} event${flGiftClaimed().length > 1 ? "s" : ""}</p>` : ""}
+    </div>
+    <div class="panel">
+      <h2>\ud83c\udff7 Redeem a Code</h2>
+      <p class="sub">Codes are shared on our WhatsApp/social channels \u2014 free players, GP and Legend Coins.</p>
+      <input id="redeemin" placeholder="e.g. WELCOME26-AB12-XXXX" style="width:100%;padding:10px;border-radius:8px;border:1px solid #333;background:#101812;color:#e8e8e8;margin:6px 0" />
+      <button class="btn" id="redeembtn">REDEEM \ud83c\udf81</button>
+    </div>
+    <button class="btn secondary" id="giftback">\u2b05 Main Menu</button>
+  </div>`;
+}
+// ============================ OWNER PANEL (superuser) ============================
+const FL_OWNER_HASH = 1728818593; // hashSeed("flown:" + ownerKey) — key never stored in code
+function flIsOwner() { return getSet().ownerMode === true; }
+function ownerScreen() {
+  if (!flIsOwner()) { render(menuScreen); return ""; }
+  const mlS = (() => { try { return JSON.parse(localStorage.getItem("footballLegendML_v1")); } catch (e) { return null; } })();
+  setTimeout(() => {
+    const grant = (fn) => { fn(); save && S && save(); toast("\u2705 Done"); render(ownerScreen); };
+    const g1 = $("#owbalgp"); if (g1) g1.onclick = () => grant(() => { if (S) S.gp += 10000; });
+    const g2 = $("#owballc"); if (g2) g2.onclick = () => grant(() => { if (S) S.nl += 100; });
+    const g3 = $("#owmlgp"); if (g3) g3.onclick = () => { flQueueMlGift({ id: "own:" + Date.now(), title: "Owner grant", mlgp: 50 }); toast("\u2705 Queued \u2014 open ML"); };
+    const g4 = $("#owmllc"); if (g4) g4.onclick = () => { flQueueMlGift({ id: "own:" + Date.now(), title: "Owner grant", mllc: 100 }); toast("\u2705 Queued \u2014 open ML"); };
+    const sp = $("#owspawn"); if (sp) sp.onclick = () => {
+      const pos = $("#owpos").value, ovr = Math.max(60, Math.min(94, +($("#owovr").value || 88))), card = $("#owcard").value;
+      flQueueMlGift({ id: "own:" + Date.now(), title: "Owner spawn", pl: { pos, ovr, card } });
+      toast("\u2705 " + card + " " + pos + " " + ovr + " queued \u2014 open ML");
+    };
+    const sk = $("#owskills"); if (sk) sk.onclick = () => grant(() => { if (S) { S.skillSlotsBought = 3; } });
+    const cd = $("#owcamp"); if (cd) cd.onclick = () => { try { const M2 = JSON.parse(localStorage.getItem("footballLegendML_v1")); if (M2) { M2.campDue = true; localStorage.setItem("footballLegendML_v1", JSON.stringify(M2)); if (window.flMirror) flMirror("footballLegendML_v1", JSON.stringify(M2)); } toast("\u2705 Camp reset"); } catch (e) {} };
+    const js = $("#owjump"); if (js) js.onclick = () => grant(() => { if (S) { S.matchday = 18; } });
+    const co = $("#owcode"); if (co) co.onclick = () => {
+      const tpl = $("#owtpl").value;
+      const serial = Math.random().toString(36).slice(2, 6).toUpperCase();
+      const chk = (E.hashSeed(tpl + "-" + serial + "-" + FL_CODE_SECRET) >>> 0).toString(36).slice(0, 4).toUpperCase();
+      $("#owcodeout").value = tpl + "-" + serial + "-" + chk;
+      $("#owcodeout").style.display = "block";
+    };
+    const dbgB = $("#owdbg"); if (dbgB) dbgB.onclick = () => {
+      const fx = S && !S.retired ? myNextFixture() : null;
+      let txt = "seed: " + (S ? S.seed : "-") + "\nseason/md: " + (S ? S.season + "/" + S.matchday : "-");
+      if (fx) {
+        const H = S.world.clubs[fx.home], A = S.world.clubs[fx.away];
+        const p = E.winProbs(H, A, 2000);
+        txt += "\nnext: " + H.short + " (str " + H.str + ") v " + A.short + " (str " + A.str + ")\nodds@2000 sims: " + p.home + "/" + p.draw + "/" + p.away;
+      }
+      if (mlS) txt += "\nML: s" + mlS.season + " md" + mlS.matchday + " budget " + mlS.budget + "M lc " + (mlS.lc || 0) + " squad " + (mlS.squad || []).length;
+      txt += "\ngifts queued: " + (localStorage.getItem("flMlGifts") || "[]");
+      $("#owdbgout").value = txt; $("#owdbgout").style.display = "block";
+    };
+    const off = $("#owoff"); if (off) off.onclick = () => { setSet("ownerMode", false); toast("Owner mode OFF"); render(menuScreen); };
+    $("#owback").onclick = () => render(menuScreen);
+  }, 0);
+  return `<div class="screen">
+    <div class="topbar"><div class="logo"><span class="brand1">OWNER</span> <span class="legend">PANEL</span></div></div>
+    <div class="panel"><h2>\ud83d\udc51 Superuser \u00b7 ${flPlayerId()}</h2>
+      <p class="sub">Testing & content tools. Owner-only \u2014 gated by Player ID + key.</p></div>
+    <div class="panel"><h2>\ud83d\udcb0 Currency</h2>
+      <div class="optrow">
+        <button class="btn secondary" id="owbalgp" style="flex:1">BaL +10,000 GP</button>
+        <button class="btn secondary" id="owballc" style="flex:1">BaL +100 LC</button>
+      </div>
+      <div class="optrow">
+        <button class="btn secondary" id="owmlgp" style="flex:1">ML +50M GP</button>
+        <button class="btn secondary" id="owmllc" style="flex:1">ML +100 LC</button>
+      </div>
+    </div>
+    <div class="panel"><h2>\ud83c\udfad Spawn ML Player</h2>
+      <div class="optrow">
+        <select id="owpos" style="flex:1;padding:8px;background:#101812;color:#e8e8e8;border:1px solid #333;border-radius:8px"><option>FW</option><option>MF</option><option>DF</option><option>GK</option></select>
+        <input id="owovr" value="88" style="flex:1;padding:8px;background:#101812;color:#e8e8e8;border:1px solid #333;border-radius:8px" />
+        <select id="owcard" style="flex:1;padding:8px;background:#101812;color:#e8e8e8;border:1px solid #333;border-radius:8px"><option>legendary</option><option>bigtime</option><option>showtime</option><option>trending</option></select>
+      </div>
+      <button class="btn secondary" id="owspawn">SPAWN \u2192 queued for ML</button>
+    </div>
+    <div class="panel"><h2>\ud83d\udee0 Utilities</h2>
+      <div class="optrow">
+        <button class="btn secondary" id="owskills" style="flex:1">Unlock BaL skill slots</button>
+        <button class="btn secondary" id="owcamp" style="flex:1">Reset ML camp</button>
+        <button class="btn secondary" id="owjump" style="flex:1">Jump to season end</button>
+      </div>
+    </div>
+    <div class="panel"><h2>\ud83c\udff7 Generate Redeem Code</h2>
+      <select id="owtpl" style="width:100%;padding:8px;background:#101812;color:#e8e8e8;border:1px solid #333;border-radius:8px">${Object.keys(FL_CODE_TEMPLATES).map(t => `<option>${t}</option>`).join("")}</select>
+      <button class="btn secondary" id="owcode" style="margin-top:6px">GENERATE</button>
+      <textarea id="owcodeout" readonly style="width:100%;height:44px;display:none;margin-top:6px" onclick="this.select()"></textarea>
+      <p class="sub">Each generated code is unique & single-use per device. Share on WhatsApp/social.</p>
+    </div>
+    <div class="panel"><h2>\ud83e\udde0 Debug</h2>
+      <button class="btn secondary" id="owdbg">ENGINE SNAPSHOT (seeds, true odds, state)</button>
+      <textarea id="owdbgout" readonly style="width:100%;height:120px;display:none;margin-top:6px" onclick="this.select()"></textarea>
+    </div>
+    <button class="btn secondary" id="owoff">\ud83d\udd12 Turn owner mode OFF</button>
+    <button class="btn secondary" id="owback">\u2b05 Main Menu</button>
+  </div>`;
 }
 
 // ---------- Boot ----------
 load();
 if (S) {
   S.flags = S.flags || { wins: 0, bestRating: 0, hatTrick: false, cleanSheets: 0 };
+  if (S.age == null) { S.age = Math.min(44, 16 + S.season); S.retired = false; save(); } // v1.3: ages arrive
+  if (!S.galaxy) { // v1.2 world update migration: existing careers get the 6-league galaxy
+    try {
+      S.galaxy = E.makeGalaxy(S.seed);
+      S.leagueIdx = S.tier === 0 ? E.leagueForRegion(S.region) : 0;
+      S.galaxy.leagues[S.leagueIdx].clubs = S.world.clubs;
+      S.galaxy.leagues[S.leagueIdx].fixtures = S.world.fixtures;
+      S.galMD = 0; S.ct = null; S.janOffered = false; S.janOffer = null;
+      balGalaxySim();
+      pushNews("\ud83c\udf0d WORLD UPDATE: five more leagues now play alongside yours \u2014 win yours to reach the Champions Trophy.");
+      save();
+    } catch (e) {}
+  }
   S.objectives = S.objectives || {};
   for (const k in S.objectives) if (S.objectives[k] === true) S.objectives[k] = 1;
   S.news = S.news || [];
@@ -2468,6 +3072,7 @@ if (S) {
   if (S.condition === undefined) S.condition = 100;
   if (S.injury === undefined) S.injury = 0;
   S.upgrades = S.upgrades || { fitness: 0, medical: 0, agentNet: 0 };
+  S.skills = S.skills || []; S.skillSlotsBought = S.skillSlotsBought || 0;
   if (S.loginStreak === undefined) { S.lastLogin = null; S.loginStreak = 0; }
 }
 // migration: older saves used positions/fields that no longer exist
@@ -2501,10 +3106,29 @@ function menuScreen() {
   setTimeout(() => {
     $("#gobal").onclick = () => { localStorage.setItem("flMode", "bal"); render(S ? homeScreen : createScreen); };
     $("#goml").onclick = () => { if (window.ML) ML.enter(); else toast("Loading..."); };
+    if (!getSet().seenIntro) {
+      const ov = document.createElement("div");
+      ov.id = "introov";
+      ov.style.cssText = "position:fixed;inset:0;background:rgba(6,10,8,.94);z-index:99;display:flex;align-items:center;justify-content:center;padding:20px";
+      ov.innerHTML = `<div style="max-width:420px">
+        <h1 style="margin:0 0 4px">\u26bd Welcome, gaffer.</h1>
+        <p class="sub" style="margin:0 0 14px">60 seconds, three things to know:</p>
+        <div class="panel" style="margin:8px 0"><b>\u2b50 Become a Legend</b><p class="sub" style="margin:4px 0 0">Create ONE player, live their whole career. During matches YOU make the big calls \u2014 shoot, pass, hold \u2014 with honest odds shown for every choice.</p></div>
+        <div class="panel" style="margin:8px 0"><b>\ud83c\udfc6 Master League</b><p class="sub" style="margin:4px 0 0">Build a squad from card packs, set tactics, climb the leagues. One save \u2014 your club's story is permanent.</p></div>
+        <div class="panel" style="margin:8px 0"><b>\ud83e\udd1d Friend Match</b><p class="sub" style="margin:4px 0 0">Export your squad as a code. Friends import it and try to beat you.</p></div>
+        <p class="sub" style="margin:10px 0">The engine is never scripted \u2014 the odds you see are the odds you get. Good luck.</p>
+        <button class="btn" id="introgo" style="width:100%">LET'S GO \u2794</button>
+      </div>`;
+      document.body.appendChild(ov);
+      $("#introgo").onclick = () => { setSet("seenIntro", true); ov.remove(); };
+    }
     $("#gofr").onclick = () => render(friendlyScreen);
     $("#goset").onclick = () => render(settingsScreen);
     $("#gohow").onclick = () => render(howScreen);
+    const gg = $("#gogifts"); if (gg) gg.onclick = () => render(giftsScreen);
+    const go2 = $("#goowner"); if (go2) go2.onclick = () => render(ownerScreen);
   }, 0);
+  const liveGifts = flGiftsLive().length;
   return `<div class="screen">
     <div class="topbar"><div class="logo"><span class="brand1">FOOTBALL</span> <span class="legend">LEGEND</span></div></div>
     <div class="panel center"><h1>\u26bd FOOTBALL LEGEND</h1>
@@ -2524,6 +3148,14 @@ function menuScreen() {
       <h2>\ud83c\udfae Friend Match (Challenge Codes)</h2>
       <p class="sub">Set up a match, send the code. Your friend plays the identical honest match on their own phone \u2014 then sends the result code back so you can watch it too.</p>
     </div>
+    <div class="panel" style="cursor:pointer${liveGifts ? ";border-color:var(--gold)" : ""}" id="gogifts">
+      <h2>\ud83c\udf81 Gifts & Events${liveGifts ? ` <span class="badge gold" style="float:right">${liveGifts} LIVE</span>` : ""}</h2>
+      <p class="sub">Free players, GP and Legend Coins \u2014 event drops and redeem codes. Everything a gift, nothing pay-to-win.</p>
+    </div>
+    ${flIsOwner() ? `<div class="panel" style="cursor:pointer;border-color:var(--gold)" id="goowner">
+      <h2>\ud83d\udc51 Owner Panel</h2>
+      <p class="sub">Superuser tools \u2014 grants, spawns, code generator, engine debug.</p>
+    </div>` : ""}
     <div class="optrow" style="margin-top:2px">
       <div class="opt" id="gohow" style="flex:1;text-align:center">\ud83d\udcd6 How it works</div>
       <div class="opt" id="goset" style="flex:1;text-align:center">\u2699\ufe0f Settings & Backup</div>
@@ -2561,6 +3193,7 @@ function frDuel(hstl, astl) {
 function friendlyScreen() {
   const pool = friendlyPool();
   let tab = "create", myClubI = -1, myMent = "balanced", myStyl = "possession", ch = null, code = "";
+  let myForm = 0, hostHome = true, frSubs = 5; // editable match settings (sealed into the code)
   setTimeout(() => {
     function clubGrid(sel) {
       return `<div class="optrow">${pool.map((c, i) =>
@@ -2581,6 +3214,14 @@ function friendlyScreen() {
           <p class="sub">Pick your club and sealed tactics. Send the code to your friend.</p>
           ${clubGrid(myClubI)}<p class="sub" style="margin-top:8px">Your mentality (sealed into the code)</p>${mentRow(myMent)}
           <p class="sub" style="margin-top:8px">Your playing style (sealed \u00b7 counters give +1.0 str)</p>${styleRow(myStyl)}
+          <p class="sub" style="margin-top:8px">Match settings (sealed \u00b7 shown to your friend)</p>
+          <div class="optrow">
+            <div class="opt ${hostHome ? "sel" : ""}" data-frhh="1" style="flex:1;font-size:.7rem">\ud83c\udfdf I'm home<br><span class="sub">+home lift</span></div>
+            <div class="opt ${!hostHome ? "sel" : ""}" data-frhh="0" style="flex:1;font-size:.7rem">\u2708\ufe0f I'm away<br><span class="sub">they get it</span></div>
+          </div>
+          <div class="optrow">${[3, 4, 5, 6].map(n => `<div class="opt ${frSubs === n ? "sel" : ""}" data-frsb="${n}" style="flex:1;font-size:.7rem">${n} subs</div>`).join("")}</div>
+          <p class="sub" style="margin-top:8px">Your form override (\u25b2\u25bc \u00b7 honest \u00b1str, visible in the odds)</p>
+          <div class="optrow">${[-2, -1, 0, 1, 2].map(fv => `<div class="opt ${myForm === fv ? "sel" : ""}" data-frf="${fv}" style="flex:1;font-size:.7rem">${fv > 0 ? "\u25b2".repeat(fv) : fv < 0 ? "\u25bc".repeat(-fv) : "\u2014"}</div>`).join("")}</div>
           <button class="btn" id="frgen" ${myClubI < 0 ? "disabled" : ""}>GET CHALLENGE CODE</button>
           ${code ? `<p class="sub" style="margin-top:8px">Send this to your friend:</p><textarea readonly style="width:100%;height:70px" onclick="this.select()">${code}</textarea>` : ""}`;
       } else if (tab === "accept") {
@@ -2595,13 +3236,24 @@ function friendlyScreen() {
             <p class="sub" style="margin-top:8px">Pick YOUR club:</p>${clubGrid(myClubI)}
             <p class="sub" style="margin-top:8px">Your mentality</p>${mentRow(myMent)}
             ${ch.hstl ? `<p class="sub" style="margin-top:8px">Your playing style (theirs is SEALED \ud83d\udd12 \u00b7 counter it for +1.0)</p>${styleRow(myStyl)}` : ""}
+            ${ch.v >= 3 ? `<p class="sub" style="margin-top:8px">Match rules: <b>${ch.hh ? "they are home" : "YOU are home"}</b> \u00b7 ${ch.sb || 5} subs \u00b7 their form ${ch.hf > 0 ? "\u25b2".repeat(ch.hf) : ch.hf < 0 ? "\u25bc".repeat(-ch.hf) : "\u2014"}</p>
+            <p class="sub" style="margin-top:8px">Your form override (honest \u00b1str)</p>
+            <div class="optrow">${[-2, -1, 0, 1, 2].map(fv => `<div class="opt ${myForm === fv ? "sel" : ""}" data-frf="${fv}" style="flex:1;font-size:.7rem">${fv > 0 ? "\u25b2".repeat(fv) : fv < 0 ? "\u25bc".repeat(-fv) : "\u2014"}</div>`).join("")}</div>` : ""}
             <button class="btn" id="frplay" ${myClubI < 0 ? "disabled" : ""}>\u26bd PLAY THE MATCH</button>`;
         }
       } else {
         body = `<h2>\ud83d\udcfa Watch a Result</h2>
           <p class="sub">Your friend played your challenge? Paste the result code they sent back \u2014 you'll watch the exact same match.</p>
           <textarea id="frin" style="width:100%;height:70px" placeholder="paste result code"></textarea>
-          <button class="btn" id="frwatch">WATCH \u2794</button>`;
+          <button class="btn" id="frwatch">WATCH \u2794</button>
+          <div class="panel" style="margin-top:10px">
+            <h2 style="font-size:.85rem">\ud83d\udcf1 How to connect</h2>
+            <p class="sub">1\ufe0f\u20e3 CREATE a challenge \u2192 copy the code.<br>
+            2\ufe0f\u20e3 Send it over WhatsApp/SMS \u2014 any messenger works, no internet needed in the game.<br>
+            3\ufe0f\u20e3 Your friend hits ACCEPT, pastes it, picks their side, plays.<br>
+            4\ufe0f\u20e3 They send back the RESULT code \u2014 paste it here to watch the identical match.<br>
+            \ud83d\udd12 Tactics are sealed in the code \u2014 nobody can peek, and both phones simulate the exact same honest match.</p>
+          </div>`;
       }
       $("#frbox").innerHTML = `
         <div class="optrow" style="margin-bottom:10px">
@@ -2617,20 +3269,23 @@ function friendlyScreen() {
       document.querySelectorAll("[data-frc]").forEach(o => o.onclick = () => { myClubI = +o.dataset.frc; code = ""; draw(); });
       document.querySelectorAll("[data-frm]").forEach(o => o.onclick = () => { myMent = o.dataset.frm; code = ""; draw(); });
       document.querySelectorAll("[data-frs]").forEach(o => o.onclick = () => { myStyl = o.dataset.frs; code = ""; draw(); });
+      document.querySelectorAll("[data-frhh]").forEach(o => o.onclick = () => { hostHome = o.dataset.frhh === "1"; code = ""; draw(); });
+      document.querySelectorAll("[data-frsb]").forEach(o => o.onclick = () => { frSubs = +o.dataset.frsb; code = ""; draw(); });
+      document.querySelectorAll("[data-frf]").forEach(o => o.onclick = () => { myForm = +o.dataset.frf; code = ""; draw(); });
       $("#frback").onclick = () => render(menuScreen);
       const g = $("#frgen"); if (g) g.onclick = () => {
         const c = pool[myClubI];
-        code = frEnc({ v: 2, hn: c.name, hshort: c.short, hs: c.str, hm: myMent, hstl: myStyl, x: Math.floor(Math.random() * 1e6) });
+        code = frEnc({ v: 3, hn: c.name, hshort: c.short, hs: c.str, hm: myMent, hstl: myStyl, hf: myForm, hh: hostHome, sb: frSubs, x: Math.floor(Math.random() * 1e6) });
         draw();
       };
       const d = $("#frdecode"); if (d) d.onclick = () => {
         const o = frDec($("#frin").value);
-        if (!o || (o.v !== 1 && o.v !== 2) || !o.hn) { toast("\u274c Invalid code"); return; }
+        if (!o || ![1, 2, 3].includes(o.v) || !o.hn) { toast("\u274c Invalid code"); return; }
         ch = o; myClubI = -1; draw();
       };
       const p = $("#frplay"); if (p) p.onclick = () => {
         const mine = pool[myClubI];
-        const R = Object.assign({}, ch, { an: mine.name, ashort: mine.short, as: mine.str, am: myMent }, ch.hstl ? { astl: myStyl } : {});
+        const R = Object.assign({}, ch, { an: mine.name, ashort: mine.short, as: mine.str, am: myMent, af: myForm }, ch.hstl ? { astl: myStyl } : {});
         startFrMatch(R, "accept");
       };
       const w = $("#frwatch"); if (w) w.onclick = () => {
@@ -2650,12 +3305,18 @@ function friendlyScreen() {
 function startFrMatch(R, mode) {
   const parts = [R.hn, R.hs, R.hm, R.x, R.an, R.as, R.am];
   if (R.hstl || R.astl) parts.push(R.hstl || "", R.astl || "");
+  if (R.v >= 3) parts.push(R.hf || 0, R.af || 0, R.hh ? 1 : 0, R.sb || 5);
   const seed = E.hashSeed(parts.join("~"));
   const duel = frDuel(R.hstl, R.astl);
-  const Hc = { name: R.hn, short: R.hshort, str: R.hs + FR_MENTS[R.hm][1] + duel.h, col1: "#2b7a4b", col2: "#fff" };
-  const Ac = { name: R.an, short: R.ashort, str: R.as + FR_MENTS[R.am][1] + duel.a, col1: "#7a2b2b", col2: "#fff" };
+  const hForm = (R.hf || 0) * 0.75, aForm = (R.af || 0) * 0.75; // honest form \u00b1str, visible in odds
+  // hh=false means the CREATOR chose away — swap who is listed as the home team
+  const creator = { name: R.hn, short: R.hshort, str: R.hs + FR_MENTS[R.hm][1] + duel.h + hForm, col1: "#2b7a4b", col2: "#fff" };
+  const acceptor = { name: R.an, short: R.ashort, str: R.as + FR_MENTS[R.am][1] + duel.a + aForm, col1: "#7a2b2b", col2: "#fff" };
+  const Hc = (R.v >= 3 && R.hh === false) ? acceptor : creator;
+  const Ac = (R.v >= 3 && R.hh === false) ? creator : acceptor;
   const probs = E.winProbs(Hc, Ac, 600);
-  render(() => friendlyMatch(Hc, Ac, probs, { seed, R, mode, duelTxt: duel.txt }));
+  const ruleTxt = R.v >= 3 ? ` \u00b7 ${R.sb || 5} subs \u00b7 form ${R.hf > 0 ? "\u25b2".repeat(R.hf) : R.hf < 0 ? "\u25bc".repeat(-(R.hf)) : "\u2014"}/${(R.af || 0) > 0 ? "\u25b2".repeat(R.af) : (R.af || 0) < 0 ? "\u25bc".repeat(-(R.af)) : "\u2014"}` : "";
+  render(() => friendlyMatch(Hc, Ac, probs, { seed, R, mode, duelTxt: duel.txt + ruleTxt }));
 }
 
 function friendlyMatch(Hc, Ac, probs, ctx) {
@@ -2746,31 +3407,91 @@ function friendlyMatch(Hc, Ac, probs, ctx) {
 
 
 // ============================ TRANSFER OFFERS ============================
+function janWindowDue() { // January window: one mid-season offer chance around MD9
+  if (!S.galaxy || S.janOffered || S.matchday < 9 || S.matchday > 11) return false;
+  const avg = S.myStats.ratings.length ? S.myStats.ratings.reduce((a, b) => a + b, 0) / S.myStats.ratings.length : 6;
+  return avg >= 7.0 || S.myStats.goals >= 7 || S.transferRequest;
+}
+function janOfferScreen() {
+  S.janOffered = true; save();
+  const rng = E.mulberry32(E.hashSeed(S.seed + ":jan:" + S.season));
+  const cands = [];
+  S.galaxy.leagues.forEach((L, li) => {
+    if (li === S.leagueIdx) return;
+    const sorted = L.clubs.map((c, i) => ({ c, i })).sort((x, y) => y.c.str - x.c.str);
+    cands.push({ li, i: sorted[Math.floor(rng() * 4)].i, lg: L.name });
+  });
+  const pick = cands[Math.floor(rng() * cands.length)];
+  const club = S.galaxy.leagues[pick.li].clubs[pick.i];
+  setTimeout(() => {
+    const acc = $("#janacc"); if (acc) acc.onclick = () => {
+      if (S.ct && !S.ct.done) { // CT place belongs to the old club — sim it out without you
+        S.ct.alive = false;
+        if (S.ct.stage === "group") {
+          E.ctSimGroups(S.ct, S.galaxy, S.seed + ":bal:s" + S.season, 6, false);
+          S.ct.gPlayed = 6;
+          E.ctAdvanceToKO(S.ct, S.galaxy, S.seed + ":bal:s" + S.season);
+          S.ct.alive = false;
+        }
+        while (S.ct.ko && S.ct.ko.length > 1 && S.ct.koRound <= 2) { const rr = E.ctSimKORound(S.ct, S.galaxy, S.seed + ":bal:s" + S.season, false, null); S.ct.ko = rr.next; S.ct.koRound++; }
+        S.ct.done = true; S.ct.champion = (S.ct.ko && S.ct.ko[0]) || null;
+        pushNews("\ud83c\udf0d Your Champions Trophy campaign stays behind with your old club.");
+      }
+      S.cup = { round: S.cup.round, alive: false }; // domestic cup run also ends
+      balSwitchLeague(pick.li, pick.i, true);
+      S.gp += 600;
+      pushNews("\u2708\ufe0f JANUARY MOVE! " + S.name + " joins " + club.name + " (" + pick.lg + ") mid-season (+600 GP).");
+      toast("\u2708\ufe0f Welcome to " + club.name + "!");
+      save(); render(homeScreen);
+    };
+    const dec = $("#jandec"); if (dec) dec.onclick = () => {
+      pushNews("\ud83d\udcf0 " + S.name + " turns down a January move \u2014 staying loyal to " + myClub().name + ".");
+      save(); render(homeScreen);
+    };
+  }, 0);
+  return `<div class="screen">${topbar()}
+    <div class="panel center">
+      <h1>\ud83e\udd1d January Window</h1>
+      <p class="sub" style="margin:8px 0">Your form has attracted a mid-season bid.</p>
+    </div>
+    <div class="panel">
+      <h2>${club.name} <span class="badge gold" style="float:right">str ${club.str}</span></h2>
+      <p class="sub">${pick.lg} \u00b7 mid-season switch \u00b7 <b style="color:var(--gold)">+600 GP signing bonus</b></p>
+      <p class="sub">You inherit their league position and fixtures. Your cup run${S.ct ? " and Champions Trophy place" : ""} stay${S.ct ? "" : "s"} with your old club \u2014 a real cost of moving.</p>
+      <button class="btn" id="janacc">ACCEPT THE MOVE \u2708\ufe0f</button>
+      <button class="btn secondary" id="jandec">STAY \ud83c\udfe0</button>
+    </div>
+  </div>`;
+}
 function transferOfferScreen(avg, myPos) {
-  const world1 = E.makeWorld(1, S.seed + ":t1:s" + S.season, S.region);
   const rng = E.mulberry32(E.hashSeed(S.seed + ":offers:" + S.season));
-  const sorted = world1.clubs.map((c, i) => ({ c, i })).sort((x, y) => y.c.str - x.c.str);
-  const top = sorted[Math.floor(rng() * 3)];
-  let midIdx = 4 + Math.floor(rng() * 4);
-  const mid = sorted[midIdx].i === top.i ? sorted[midIdx + 1] : sorted[midIdx];
+  // cross-league offers from the galaxy: one giant from a stronger league, one stepping stone
+  const stronger = [0, 1, 2].filter(li => li !== S.leagueIdx);
+  const li1 = stronger[Math.floor(rng() * stronger.length)];
+  let li2 = stronger.find(x => x !== li1); if (li2 == null) li2 = (S.leagueIdx + 3) % 6;
+  const pick2 = (li, band) => {
+    const L = S.galaxy.leagues[li];
+    const sorted = L.clubs.map((c, i) => ({ c, i })).sort((x, y) => y.c.str - x.c.str);
+    const s = sorted[band + Math.floor(rng() * 3)];
+    return { li, i: s.i, c: s.c, lg: L.name };
+  };
+  const top = pick2(li1, 0), mid = pick2(li2, 4);
   const offers = [
-    { key: "top", club: top, tag: "\ud83c\udfc6 Title challenger", note: "Biggest stage, biggest pressure.", gp: 800 },
-    { key: "mid", club: mid, tag: "\ud83d\udcc8 Stepping stone", note: "Guaranteed starter, room to be the main man.", gp: 500 }
+    { key: "top", club: top, tag: "\ud83c\udfc6 Title challenger \u00b7 " + top.lg, note: "Biggest stage, biggest pressure.", gp: 800 },
+    { key: "mid", club: mid, tag: "\ud83d\udcc8 Stepping stone \u00b7 " + mid.lg, note: "Guaranteed starter, room to be the main man.", gp: 500 }
   ];
   setTimeout(() => {
     document.querySelectorAll("[data-offer]").forEach(o => o.onclick = () => {
       const pick = o.dataset.offer;
       if (pick === "stay") {
-        S.world = E.makeWorld(S.tier, S.seed + ":s" + (S.season + 1), S.region);
-        pushNews("\ud83d\udcf0 " + S.name + " rejects Europe \u2014 loyalty! One more season at " + myClub().name + ".");
+        pushNews("\ud83d\udcf0 " + S.name + " rejects the moves \u2014 loyalty! One more season at " + myClub().name + ".");
         toast("Staying home. Deliver again and they'll return.");
       } else {
         const off = offers.find(x => x.key === pick);
         S.tier = 1;
-        S.world = world1;
-        S.clubIdx = off.club.i;
+        balSwitchLeague(off.club.li, off.club.i, false);
         S.gp += off.gp;
-        pushNews("\u2708\ufe0f TRANSFER! " + S.name + " signs for " + off.club.c.name + " (+" + off.gp + " GP bonus).");
+        pushNews("\u2708\ufe0f TRANSFER! " + S.name + " signs for " + off.club.c.name + " in the " + off.club.lg + " (+" + off.gp + " GP bonus).");
         toast("\u2708\ufe0f Welcome to " + off.club.c.name + "! +" + off.gp + " GP");
       }
       finishSeasonRollover();
@@ -2791,22 +3512,60 @@ function transferOfferScreen(avg, myPos) {
   </div>`;
 }
 function finishSeasonRollover() {
+  if (S.galaxy) {
+    const L = S.galaxy.leagues[S.leagueIdx]; // rollover regenerated fixtures & cleared results
+    S.world = { tier: S.tier, clubs: L.clubs, fixtures: L.fixtures, h2h: S.world.h2h || {} };
+    S.galMD = 0; S.janOffered = false; S.janOffer = null;
+    const me = { league: S.leagueIdx, club: S.clubIdx };
+    const q = S.pendingQual; S.pendingQual = null;
+    if (q && q.cl.some(e => e.league === me.league && e.club === me.club)) {
+      S.ct = E.ctMake(q.cl, me, S.seed + ":balct:s" + (S.season + 1));
+      S.nl += 10;
+      pushNews("\ud83c\udf0d " + myClub().name + " QUALIFY for the CHAMPIONS TROPHY! Continental nights ahead (+10 LC).");
+    } else {
+      S.ct = null;
+      if (q) pushNews("\ud83c\udf0d No Champions Trophy football this season \u2014 finish top of the league to qualify.");
+    }
+  }
   S.season++; S.matchday = 0; S.results = [];
+  S.age = (S.age || 17) + 1;
+  if (S.age >= 45) { balRetire(true); return; } // 45: the boots come off, no exceptions
+  if (S.age >= 41) pushNews("\u23f3 " + S.name + " is " + S.age + " \u2014 every season now could be the last. Retirement is forced at 45.");
   S.myStats = { apps: 0, goals: 0, assists: 0, ratings: [] };
   S.scorers = {};
   S.cup = { round: 0, alive: true };
   S.condition = 100; S.injury = 0;
-  pushNews(`\ud83d\uddd3 Season ${S.season} kicks off \u2014 ${myClub().name} dream big.`);
+  pushNews(`\ud83d\uddd3 Season ${S.season} kicks off \u2014 ${S.name} (age ${S.age}) and ${myClub().name} dream big.`);
   S.lastFive = []; S.transferRequest = false; S.gp += 300; S.nl += 10;
   save();
   render(homeScreen);
 }
 
 // ============================ SETTINGS & BACKUP ============================
+function flPlayerId() { // stable ID, future-ready for cloud saves / online PvP
+  let id = getSet().playerId;
+  if (!id) {
+    id = "FL-" + Math.random().toString(36).slice(2, 6).toUpperCase() + "-" + Math.random().toString(36).slice(2, 6).toUpperCase();
+    setSet("playerId", id);
+  }
+  return id;
+}
 function settingsScreen() {
   const st = getSet();
+  const mlS = (() => { try { return JSON.parse(localStorage.getItem("footballLegendML_v1")); } catch (e) { return null; } })();
+  const lifeApps = (S ? S.career.totalApps : 0);
+  const lifeGoals = (S ? S.career.totalGoals : 0);
+  const mlSeasons = mlS ? (mlS.career || []).length : 0;
+  const mlTrophies = mlS ? (mlS.career || []).filter(c => c.pos === 1 || c.cup === "WON").length : 0;
   setTimeout(() => {
     $("#tgsnd").onclick = () => { setSet("sound", !(getSet().sound !== false)); render(settingsScreen); };
+    $("#errcopy").onclick = () => {
+      const log = localStorage.getItem("flErrLog") || "[]";
+      const diag = "Football Legend diagnostics\n" + (navigator.userAgent || "") + "\n" + log;
+      if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(diag).then(() => toast("Diagnostics copied")); }
+      else { prompt("Copy this:", diag); }
+    };
+    $("#errclear").onclick = () => { localStorage.removeItem("flErrLog"); toast("Log cleared"); render(settingsScreen); };
     $("#tgcut").onclick = () => { setSet("cutscenes", !(getSet().cutscenes !== false)); render(settingsScreen); };
     $("#mkbak").onclick = () => {
       const pack = { v: 1, t: Date.now(), bal: localStorage.getItem(SAVE_KEY), ml: localStorage.getItem("footballLegendML_v1") };
@@ -2826,6 +3585,18 @@ function settingsScreen() {
       } catch (e) { toast("\u274c Invalid backup code"); }
     };
     $("#setback").onclick = () => render(menuScreen);
+    let idTaps = 0;
+    const idRow = $("#pidrow");
+    if (idRow) idRow.onclick = () => {
+      idTaps++;
+      if (idTaps >= 7) {
+        idTaps = 0;
+        const key = prompt("Owner key:");
+        if (key && E.hashSeed("flown:" + key.trim()) === FL_OWNER_HASH) {
+          setSet("ownerMode", true); toast("\ud83d\udc51 Owner mode ON"); render(menuScreen);
+        } else if (key !== null) toast("\u274c Wrong key");
+      }
+    };
     const rb = $("#rstbal"); if (rb) rb.onclick = () => { if (confirm("Delete Become a Legend career? (ML untouched)")) { localStorage.removeItem(SAVE_KEY); S = null; flMirror(SAVE_KEY, null); flFileBackupSoon(); toast("BaL career deleted"); render(settingsScreen); } };
     const rm = $("#rstml"); if (rm) rm.onclick = () => { if (confirm("Delete Master League career? (BaL untouched)")) { localStorage.removeItem("footballLegendML_v1"); flMirror("footballLegendML_v1", null); flFileBackupSoon(); toast("ML career deleted"); render(settingsScreen); } };
   }, 0);
@@ -2833,7 +3604,18 @@ function settingsScreen() {
   return `<div class="screen">
     <div class="topbar"><div class="logo"><span class="brand1">SETTINGS</span> <span class="legend">& BACKUP</span></div></div>
     <div class="panel"><h2>\u2699\ufe0f Settings</h2>
-      <div class="kv"><span>\ud83d\udd0a Sound (crowd, whistle, goals)</span><button class="btn secondary" id="tgsnd">${st.sound !== false ? "ON" : "OFF"}</button></div>
+      </div>
+    <div class="panel"><h2>\ud83d\udc64 Account</h2>
+      <div class="kv" id="pidrow" style="cursor:pointer"><span>Player ID</span><b>${flPlayerId()}</b></div>
+      <p class="sub">Your permanent ID \u2014 cloud saves and online play will attach to it in a future update.</p>
+      <div class="kv"><span>\u2b50 BaL career</span><b>${S ? S.name + " \u00b7 " + lifeApps + " apps \u00b7 " + lifeGoals + " goals" : "\u2014"}</b></div>
+      <div class="kv"><span>\ud83c\udfc6 ML club</span><b>${mlS ? (mlS.clubName || "founded") + " \u00b7 " + mlSeasons + " seasons \u00b7 " + mlTrophies + " trophies" : "\u2014"}</b></div>
+      <div class="kv"><span>\ud83d\udcbe Backup protection</span><b>${window.Capacitor ? "\u2705 Auto (file + Android)" : "\u26a0\ufe0f Browser \u2014 use backup codes"}</b></div>
+    </div>
+    <div class="panel"><h2>\u2699\ufe0f Preferences</h2>
+    <div class="kv"><span>\ud83d\udd0a Sound (crowd, whistle, goals)</span><button class="btn secondary" id="tgsnd">${st.sound !== false ? "ON" : "OFF"}</button></div>
+      <div class="kv"><span>\ud83e\ude7a Error log (${(() => { try { return JSON.parse(localStorage.getItem("flErrLog") || "[]").length; } catch (e) { return 0; } })()} entries)</span><span><button class="btn secondary" id="errcopy">COPY</button> <button class="btn secondary" id="errclear">CLEAR</button></span></div>
+      <p class="sub">If something breaks, tap COPY and send the text to the developer.</p>
       <div class="kv"><span>\ud83c\udfac 3D cutscenes</span><button class="btn secondary" id="tgcut">${st.cutscenes !== false ? "ON" : "OFF"}</button></div>
     </div>
     <div class="panel"><h2>\ud83d\udcbe Backup & Restore</h2>
