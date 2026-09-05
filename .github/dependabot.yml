@@ -1,0 +1,43 @@
+# Dependency scanning for Football Legend.
+# Automated weekly checks for dependencies and monthly checks for CI Actions.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      root-dependencies:
+        patterns:
+          - '*'
+    labels:
+      - dependencies
+    commit-message:
+      prefix: deps
+
+  - package-ecosystem: npm
+    directory: /app
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      app-dependencies:
+        patterns:
+          - '*'
+    labels:
+      - dependencies
+      - app
+    commit-message:
+      prefix: deps
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    labels:
+      - ci
+    commit-message:
+      prefix: ci

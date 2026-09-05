@@ -1,0 +1,27 @@
+{
+  "name": "football-legend",
+  "version": "1.5.0",
+  "private": true,
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "python3 game/serve.py",
+    "test": "node .audit/suite.cjs",
+    "test:all": "node .audit/suite.cjs",
+    "test:fairness": "node game/test-fairness.js",
+    "test:ml": "node game/test-ml.js",
+    "test:ml-ct": "node game/test-ml-ct.js",
+    "test:bal-ct": "node game/test-bal-ct.js",
+    "test:skills": "node game/test-position-skills.js",
+    "test:v15": "node game/test-v15.js",
+    "test:syntax": "node .audit/syntax.cjs",
+    "test:unshipped": "node .audit/unshipped.cjs",
+    "copy-game": "npm --prefix app run copy-game",
+    "sync": "npm --prefix app run sync",
+    "apk": "powershell -ExecutionPolicy Bypass -File scripts/build-apk.ps1",
+    "apk:local": "powershell -ExecutionPolicy Bypass -File scripts/build-apk.ps1 -Where local",
+    "apk:bash": "./scripts/build-apk.sh",
+    "build:release": "./scripts/build-release.sh"
+  }
+}

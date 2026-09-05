@@ -1,18 +1,25 @@
 node_modules/
+app/node_modules/
 app/www/
 app/android/app/build/
 app/android/build/
 app/android/.gradle/
 app/android/local.properties
 app/android/app/release/
+app/android/app/src/main/assets/public/
+app/android/app/src/main/assets/capacitor.config.json
+app/android/app/src/main/assets/capacitor.plugins.json
+.verify-tmp/
 *.hprof
 .DS_Store
+
 # NEVER commit signing secrets
 release.keystore
 keystore.properties
 KEYSTORE-CREDENTIALS.txt
 *.aab
 
-# but release artifacts are allowed
-!releases/*.aab
+# Local built APKs are ignored, but committed releases in releases/ are preserved
+*.apk
 !releases/*.apk
+!releases/*.aab

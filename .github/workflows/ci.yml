@@ -1,0 +1,110 @@
+name: Football Legend CI/CD
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            app/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          npm ci || npm install
+          npm ci --prefix app || npm install --prefix app
+
+      # Run the entire simulation & audit suite
+      - name: Run audits & test suite
+        run: npm run test:all
+
+      # Known-vulnerable packages advisory check
+      - name: Audit dependencies
+        run: |
+          npm audit --audit-level=high || echo "::warning::npm audit found advisories, review them"
+          cd app && npm audit --audit-level=high || echo "::warning::app dependencies advisories, review them"
+
+  build-android:
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            app/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          npm ci || npm install
+          npm ci --prefix app || npm install --prefix app
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('package-lock.json', 'app/package-lock.json', 'app/android/build.gradle', 'app/android/app/build.gradle') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Configure Gradle for caching and parallelism
+        run: |
+          mkdir -p ~/.gradle
+          cat >> ~/.gradle/gradle.properties << 'EOF'
+          org.gradle.caching=true
+          org.gradle.parallel=true
+          org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g
+          EOF
+
+      - name: Sync Game into Capacitor Android project
+        run: npm run sync
+
+      - name: Build Android APK
+        run: |
+          cd app/android
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Verify packaged app.js matches source
+        run: |
+          mkdir -p .verify-tmp
+          unzip -q -p app/android/app/build/outputs/apk/debug/app-debug.apk assets/public/app.js > .verify-tmp/apk-app.js
+          cmp .verify-tmp/apk-app.js game/app.js
+          echo "Verified: packaged app.js is byte-identical to game/app.js"
+          rm -rf .verify-tmp
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: football-legend-ci-apk
+          path: app/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error

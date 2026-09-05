@@ -1,12 +1,35 @@
-# Build Guide
+# Football Legend Build Guide
 
-## Prerequisites (all free)
+## Overview
+
+Football Legend is a web-native hybrid game built with HTML5/Canvas/JavaScript wrapped into a native Android application using Capacitor.
+
+You can build the installable APK using **GitHub Actions (zero local toolchain required)** or locally using **PowerShell / Bash**.
+
+---
+
+## 1. Automated Builds via GitHub Actions (Recommended)
+
+No local Android SDK or JDK required. GitHub's Ubuntu runners compile the APK with Gradle caching and upload the release.
+
+### Steps to trigger a Preview APK:
+1. Navigate to the **Actions** tab in GitHub.
+2. Under Workflows, select **Preview APK**.
+3. Click **Run workflow**.
+4. Enter the **Build number** (e.g., `6`).
+5. When the workflow completes:
+   - Download the APK from the GitHub Release (`preview-<n>`) or run artifacts.
+   - Sideload onto your Android phone.
+
+---
+
+## 2. Local Build Prerequisites
 
 - **Node.js** 18+
-- **JDK 17** (Temurin recommended)
-- **Android SDK** command-line tools (no Android Studio needed)
+- **JDK 17** (Temurin 17 recommended)
+- **Android SDK** (API 34, Build-Tools 34.0.0, commandline-tools)
 
-### Toolchain install recipe (Linux, ~2 min)
+### Linux / WSL SDK Setup
 
 ```bash
 # JDK 17
@@ -14,7 +37,7 @@ cd /opt
 curl -sL -o jdk.tar.gz "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.11%2B9/OpenJDK17U-jdk_x64_linux_hotspot_17.0.11_9.tar.gz"
 tar xzf jdk.tar.gz && rm jdk.tar.gz
 
-# Android SDK command-line tools
+# Android SDK cmdline-tools
 mkdir -p /opt/android-sdk/cmdline-tools
 curl -sL -o ct.zip "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip"
 unzip -q ct.zip -d /opt/android-sdk/cmdline-tools
@@ -25,69 +48,59 @@ yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
 $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 ```
 
-## Build steps
+---
 
-```bash
-cd app
-npm install                    # installs Capacitor + plugins (preferences, filesystem, etc.)
-node copy-game.js              # copies ../game -> www/
-npx cap sync android           # syncs www/ + plugins into the Android project
-echo "sdk.dir=/opt/android-sdk" > android/local.properties
-cd android
-chmod +x gradlew
-./gradlew assembleDebug        # output: app/build/outputs/apk/debug/app-debug.apk
+## 3. Local Build Commands
+
+### One-command build (PowerShell)
+```powershell
+.\scripts\build-apk.ps1
 ```
 
-## Cache-busting mint (browser build)
-
-`game/index.html` references versioned copies (`app.<timestamp>.js` etc.) so browsers never serve stale code. After editing any base file:
-
+### One-command build (Bash)
 ```bash
-cd game
-rm -f engine.1*.js app.1*.js style.1*.css ml.1*.js
-V=$(date +%s)
-cp engine.js engine.$V.js; cp app.js app.$V.js; cp style.css style.$V.css; cp ml.js ml.$V.js
-sed -i "s/engine\.[0-9]*\.js/engine.$V.js/; s/app\.[0-9]*\.js/app.$V.js/; s/style\.[0-9]*\.css/style.$V.css/; s/ml\.[0-9]*\.js/ml.$V.js/" index.html
-cp index.html play.html
+./scripts/build-apk.sh
 ```
 
-The APK path uses the plain files (`copy-game.js` copies base files), so minting is only needed for browser testing.
-
-## Verification before shipping (mandatory)
-
+### Manual step-by-step
 ```bash
-cd game
-node --check app.js && node --check engine.js && node --check ml.js
-node test-fairness.js    # must be 21/21
-node test-ml.js          # must be 0 failures
+# 1. Run audits
+npm run test:all
+
+# 2. Sync web assets into Android project
+npm run sync
+
+# 3. Assemble Debug APK
+cd app/android
+./gradlew assembleDebug --no-daemon
+# Output: app/android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-After building, verify the APK actually contains the new code:
+---
 
+## 4. Verification Before Shipping
+
+Always run the full suite before making or tagging a build:
 ```bash
-jar -xf FootballLegend.apk assets/public/app.js
-cmp assets/public/app.js game/app.js   # must be identical
+npm run test:all
 ```
 
-## Signing notes
-
-- Debug builds are signed with the debug keystore (`~/.android/debug.keystore`). Keep this file — updates only install over an existing app if the signature matches.
-- For Google Play: generate a release keystore, build `.aab` with `./gradlew bundleRelease`, and NEVER lose the keystore.
-
-## Save system (3 layers)
-
-1. **localStorage** (primary) mirrored to **Capacitor Preferences** (survives WebView storage eviction).
-2. **Documents backup file** — `Documents/FootballLegend/backup.json`, rewritten (debounced 1.5s) after every save. Survives uninstall. On fresh boot with no saves, the app offers to restore from it. Android ≤10 requires one storage-permission prompt; 11+ is automatic (app-scoped Documents access).
-3. **Android Auto Backup** (`allowBackup="true"` in the manifest).
-4. Manual **backup codes** in Settings (base64 pack `{v:1,bal,ml}`) for cross-device moves.
-
-## Release APK / AAB (one command)
-
+After building, verify that `app.js` packed inside the APK is byte-identical to source:
 ```bash
-# Requires JDK 17, ANDROID_HOME, and app/android/keystore.properties
-./scripts/build-release.sh
-# → releases/FootballLegend-v1.4-release.apk
-# → releases/FootballLegend-v1.4-playstore.aab
+unzip -p football-legend.apk assets/public/app.js > tmp-app.js
+cmp tmp-app.js game/app.js
 ```
 
-`app/copy-game.js` copies from `../game` (plain filenames). Do not point it at any other folder.
+---
+
+## 5. Google Play Release (AAB)
+
+To generate a signed `.aab` for Google Play:
+1. Provide `app/android/keystore.properties` (with `storeFile`, `storePassword`, `keyAlias`, `keyPassword`).
+2. Run:
+   ```bash
+   ./scripts/build-release.sh
+   ```
+3. Artifacts will be generated in `releases/`:
+   - `releases/FootballLegend-v1.5-release.apk`
+   - `releases/FootballLegend-v1.5-playstore.aab`

@@ -1,0 +1,150 @@
+# Preview APK without using external cloud quota or local Android Studio.
+# Runs on GitHub's Ubuntu runners (Linux), compiling with Gradle directly.
+# Trigger: Actions → Preview APK → Run workflow.
+name: Preview APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_number:
+        description: 'Build number, e.g. 6. Names the release tag preview-<n>.'
+        required: true
+        type: string
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # cache: npm restores ~/.npm between runs. Root and app/ manifests are both cached.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            app/package-lock.json
+
+      # The build number is named by a human, not inferred.
+      - name: Validate build number
+        run: |
+          N="${{ inputs.build_number }}"
+          case "$N" in
+            ''|*[!0-9]*) echo "Build number must be digits only, got '$N'." ; exit 1 ;;
+          esac
+          # Strip leading zeros so 06 and 6 cannot become two different tags.
+          N=$((10#$N))
+          echo "BUILD_N=$N" >> "$GITHUB_ENV"
+          if [ "$N" -lt 1 ]; then
+            echo "Build number must be at least 1. Got $N."
+            exit 1
+          fi
+          if git rev-parse "preview-$N" >/dev/null 2>&1; then
+            echo "Tag preview-$N already exists. Pick the next number."
+            exit 1
+          fi
+          echo "Building preview-$N"
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install dependencies
+        run: |
+          npm ci || npm install
+          npm ci --prefix app || npm install --prefix app
+
+      # Do not ship an APK that fails the simulation or audit suite.
+      - name: Run audits & test suite
+        run: npm run test:all
+
+      # Stamp build number into Android Gradle config
+      - name: Stamp build number
+        run: |
+          node -e "
+            const fs = require('fs');
+            const bgPath = 'app/android/app/build.gradle';
+            let bg = fs.readFileSync(bgPath, 'utf8');
+            bg = bg.replace(/versionCode \d+/, 'versionCode ' + process.env.BUILD_N);
+            bg = bg.replace(/versionName \"[^\"]+\"/, 'versionName \"1.5.' + process.env.BUILD_N + '\"');
+            fs.writeFileSync(bgPath, bg);
+            console.log('Stamped versionCode ' + process.env.BUILD_N + ' into ' + bgPath);
+          "
+          grep -n 'versionCode' app/android/app/build.gradle
+          grep -n 'versionName' app/android/app/build.gradle
+
+      # Cache Gradle HOME (compiled dependencies, wrapper, build cache)
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('package-lock.json', 'app/package-lock.json', 'app/android/build.gradle', 'app/android/app/build.gradle') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      # Gradle caching and parallel optimization for GitHub Actions runner
+      - name: Configure Gradle for caching and parallelism
+        run: |
+          mkdir -p ~/.gradle
+          cat >> ~/.gradle/gradle.properties << 'EOF'
+          org.gradle.caching=true
+          org.gradle.parallel=true
+          org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g
+          EOF
+          cat ~/.gradle/gradle.properties
+
+      # Copy game to www/ and sync Capacitor Android project
+      - name: Sync Game into Capacitor Android project
+        run: npm run sync
+
+      - name: Build APK locally on the runner
+        run: |
+          cd app/android
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+          cd ../..
+          cp app/android/app/build/outputs/apk/debug/app-debug.apk football-legend.apk
+
+      # Verify packaged assets are byte-identical to source code
+      - name: Verify packaged app.js matches source
+        run: |
+          mkdir -p .verify-tmp
+          unzip -q -p football-legend.apk assets/public/app.js > .verify-tmp/apk-app.js
+          cmp .verify-tmp/apk-app.js game/app.js
+          echo "Verification passed: packaged app.js is byte-identical to game/app.js"
+          rm -rf .verify-tmp
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: football-legend-apk
+          path: football-legend.apk
+          if-no-files-found: error
+
+      - name: Publish GitHub prerelease
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: preview-${{ env.BUILD_N }}
+          name: Preview ${{ env.BUILD_N }}
+          prerelease: true
+          files: football-legend.apk
+          body: |
+            Football Legend Preview ${{ env.BUILD_N }} built locally on GitHub Actions runner.
+            
+            ### How to install on your phone:
+            1. Download `football-legend.apk` on your Android device.
+            2. When Android warns about installing from an unknown source, allow it:
+               *Settings → Apps → Special app access → Install unknown apps* (enable for your browser or file manager).
+            3. Tap Install. Re-installs over previous preview builds without losing save data.

@@ -1,0 +1,9 @@
+# Football Legend - Windsurf Rules
+
+Read `CLAUDE.md` and `AGENTS.md` before editing.
+
+- Core rules: `CLAUDE.md` (fairness honesty, human-named build numbers, test gates)
+- Build instructions: `RUN.md` and `docs/BUILD.md`
+- Performance tuning: `BUILD_TIME.md`
+
+Always run `npm run test:all` before claiming work is complete.
