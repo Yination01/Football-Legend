@@ -150,6 +150,14 @@ if (appOk) {
   const me = ghostMyClub();
   check("ghostMyClub starter fallback", me && me.name && me.str > 0 && me.source === "starter");
 
+  const prevS = S;
+  S = newSave("Marco Test", "CF", "poacher", "southeuro");
+  const cardHtml = playerCardHTML(true);
+  check("bal card stats always on", cardHtml.includes("PAC") && cardHtml.includes("SHO") && cardHtml.includes("pcard-foil"));
+  check("bal card compact class", cardHtml.includes("compact") && cardHtml.includes("pcard-kit"));
+  check("bal card ovr present", /class="ovr"/.test(cardHtml));
+  S = prevS;
+
   const fakeMl = {
     clubName: "Test United", clubShort: "TST", mentality: "attacking", style: "highpress",
     squad: [], xi: [], season: 3, matchday: 4,

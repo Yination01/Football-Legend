@@ -456,7 +456,8 @@ function mlCreate() {
 function mlSquadScreen() {
   mlEnsureTrainers();
   setTimeout(() => {
-    document.querySelectorAll("[data-sell]").forEach(b => b.onclick = () => {
+    document.querySelectorAll("[data-sell]").forEach(b => b.onclick = (ev) => {
+      ev.stopPropagation();
       const p = M.squad.find(x => x.id === +b.dataset.sell);
       if (!p) return;
       const block = mlCanRemove(p); if (block) { toast(block); return; }
@@ -465,15 +466,18 @@ function mlSquadScreen() {
       M.budget = Math.round((M.budget + fee) * 10) / 10;
       M.squad = M.squad.filter(x => x.id !== p.id);
       M.soldIds.push(p.id);
+      M._sqOpen = null;
       mlAutoXI(); mlNews("SOLD: " + p.name + " (" + fmtM(fee) + ")"); mlSave();
       render(mlSquadScreen);
     });
     const ax = $("#autoxi"); if (ax) ax.onclick = () => { mlAutoXI(); mlSave(); render(mlSquadScreen); toast("Best XI picked"); };
-    document.querySelectorAll("[data-trainp]").forEach(b => b.onclick = () => {
+    document.querySelectorAll("[data-trainp]").forEach(b => b.onclick = (ev) => {
+      ev.stopPropagation();
       const p = M.squad.find(x => x.id === +b.dataset.trainp);
       if (p) render(() => mlTrainScreen(p.id));
     });
-    document.querySelectorAll("[data-conv]").forEach(b => b.onclick = () => {
+    document.querySelectorAll("[data-conv]").forEach(b => b.onclick = (ev) => {
+      ev.stopPropagation();
       const p = M.squad.find(x => x.id === +b.dataset.conv);
       if (!p) return;
       const block = mlCanRemove(p); if (block) { toast(block); return; }
@@ -481,30 +485,46 @@ function mlSquadScreen() {
       if (!confirm("Convert " + p.name + " (OVR " + p.ovr + ") into a " + ML_TRAINERS[tier].label + "? No transfer fee.")) return;
       M.squad = M.squad.filter(x => x.id !== p.id);
       M.trainers[tier]++;
+      M._sqOpen = null;
       mlNews("CONVERTED: " + p.name + " \u2192 " + ML_TRAINERS[tier].label);
       mlAutoXI(); mlSave(); render(mlSquadScreen);
     });
+    document.querySelectorAll("[data-sqrow]").forEach(b => b.onclick = () => {
+      const id = +b.dataset.sqrow;
+      M._sqOpen = M._sqOpen === id ? null : id;
+      render(mlSquadScreen);
+    });
   }, 0);
-  const rows = ["GK", "DF", "MF", "FW"].map(bucket => M.squad.filter(p => p.pos === bucket)
-    .sort((a, b) => b.ovr - a.ovr).map(p => {
+  const openId = M._sqOpen || null;
+  const fitBar = (p) => `<span class="fitbar"><i style="width:${Math.round(p.fit)}%;background:${p.fit > 70 ? "var(--green)" : p.fit > 40 ? "var(--gold)" : "var(--red)"}"></i></span>`;
+  const rows = ["GK", "DF", "MF", "FW"].map(bucket => {
+    const ps = M.squad.filter(p => p.pos === bucket).sort((a, b) => b.ovr - a.ovr);
+    if (!ps.length) return "";
+    const body = ps.map(p => {
       const inXI = M.xi.includes(p.id);
+      const open = openId === p.id;
       const trainable = p.ovr < p.pot;
       const expPct = trainable ? Math.round(100 * (p.exp || 0) / mlExpNeed(p)) : 0;
-      return `<div class="kv"><span>${inXI ? "\u2b50" : ""} <b>${mlRpos(p)}</b> ${p.name} ${mlFormArrow(p)}${mlCardChip(p)}<br>
-        <span class="sub">age ${p.age} \u00b7 fit ${Math.round(p.fit)}% \u00b7 ${fmtM(p.value)}${trainable ? ` \u00b7 \ud83d\udcc8 ${expPct}% to ${p.ovr + 1}` : " \u00b7 MAX"}</span></span>
-        <b>${p.ovr}${p.pot > p.ovr ? `<span class="sub">/${p.pot}</span>` : ""}
-        ${trainable ? `<button class="btn gold" data-trainp="${p.id}" style="padding:4px 6px;font-size:.6rem;margin-left:4px">\u2b06 TRAIN</button>` : ""}
-        <button class="btn secondary" data-conv="${p.id}" style="padding:4px 6px;font-size:.6rem;margin-left:4px">\u267b</button>
-        <button class="btn secondary" data-sell="${p.id}" style="padding:4px 6px;font-size:.6rem;margin-left:4px">SELL</button></b></div>`;
-    }).join("")).join("");
+      return `<div class="sqrow${inXI ? " xi" : ""}${open ? " open" : ""}">
+        <div class="sqmain" data-sqrow="${p.id}">
+          <span class="sqid">${inXI ? "\u2605" : ""}${mlRpos(p)}</span>
+          <span class="sqname">${p.name}${mlCardChip(p)} ${mlFormArrow(p)}</span>
+          <span class="sqovr">${p.ovr}${p.pot > p.ovr ? `<span class="sub">/${p.pot}</span>` : ""}</span>
+        </div>
+        <div class="sqsub">${fitBar(p)}<span class="sub">age ${p.age} \u00b7 ${fmtM(p.value)}${trainable ? ` \u00b7 ${expPct}%` : ""}</span></div>
+        ${open ? `<div class="sqact">
+          ${trainable ? `<button class="btn gold" data-trainp="${p.id}">TRAIN</button>` : `<span class="sub">MAX</span>`}
+          <button class="btn secondary" data-conv="${p.id}">\u267b TRAINER</button>
+          <button class="btn secondary" data-sell="${p.id}">SELL 85%</button>
+        </div>` : ""}
+      </div>`;
+    }).join("");
+    return `<div class="sqsec">${bucket} \u00b7 ${ps.length}</div>${body}`;
+  }).join("");
   return `<div class="screen">${mlTopbar()}
-    <div class="panel"><h2>Squad (${M.squad.length}) <button class="btn secondary" id="autoxi" style="float:right;padding:6px 10px;font-size:.7rem">\u2b50 AUTO BEST XI</button></h2>
-    <p class="sub">\u2b50 = in starting XI (${M.formation}). Team strength: <b>${mlTeamStr(0)}</b> <span class="sub">(XI avg incl. form/fitness/cards + depth bonus${mlXIPlayers().some(p => (p.skills || []).includes("Captaincy")) ? " + captaincy" : ""})</span></p>
-    <p class="sub">Trainers owned: \ud83e\udd49${M.trainers.bronze} \ud83e\udd48${M.trainers.silver} \ud83e\udd47${M.trainers.gold}</p>
-    <div class="kv"><span>\u2b06 TRAIN</span><span class="sub">spend trainer cards \u2192 EXP toward +1 OVR (up to potential)</span></div>
-    <div class="kv"><span>\u267b</span><span class="sub">retire player into a trainer card \u2014 no fee, better player = better trainer</span></div>
-    <div class="kv"><span>SELL</span><span class="sub">instant sale at 85% of value (squad must stay \u2265 15)</span></div>
-    <div class="kv"><span>\u2b50 AUTO BEST XI</span><span class="sub">auto-picks the strongest lineup for ${M.formation}</span></div>${rows}</div>
+    <div class="panel"><h2>Squad (${M.squad.length}) <button class="btn secondary" id="autoxi" style="float:right;padding:6px 10px;font-size:.7rem">\u2605 AUTO XI</button></h2>
+    <p class="sub">\u2605 XI \u00b7 ${M.formation} \u00b7 str <b>${mlTeamStr(0)}</b> \u00b7 tap a player for TRAIN / SELL. Trainers: \ud83e\udd49${M.trainers.bronze} \ud83e\udd48${M.trainers.silver} \ud83e\udd47${M.trainers.gold}</p>
+    ${rows}</div>
     ${mlNav()}</div>`;
 }
 

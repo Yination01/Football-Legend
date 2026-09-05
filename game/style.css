@@ -375,3 +375,49 @@ input, textarea { user-select: text; -webkit-user-select: text; font-size: 16px 
              box-shadow: 0 0 10px rgba(255, 215, 0, .7); animation: legglow 2s ease-in-out infinite; }
 @keyframes legglow { 0%, 100% { box-shadow: 0 0 6px rgba(255,215,0,.5); } 50% { box-shadow: 0 0 14px rgba(255,215,0,.95); } }
 .chip.gold { border-color: rgba(255, 215, 94, .5); color: var(--gold); }
+
+
+/* ---- BaL player card (eFootball-style, stats always visible) ---- */
+.pcard { overflow: hidden; }
+.pcard-foil {
+  pointer-events: none; position: absolute; inset: 0; border-radius: 16px;
+  background: linear-gradient(115deg, transparent 38%, rgba(255,255,255,.09) 50%, transparent 62%);
+}
+.pcard.legendary .pcard-foil {
+  background: linear-gradient(115deg, rgba(255,215,0,.14) 0%, transparent 38%, rgba(255,255,255,.18) 50%, transparent 62%);
+}
+.pcard-top { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 8px; }
+.pcard-ovrcol { text-align: center; min-width: 64px; }
+.pcard.compact { width: 100%; max-width: 280px; padding: 14px 14px 10px; }
+.pcard.compact .avatar { width: 68px; height: 68px; margin: 0; }
+.pcard.compact .ovr { font-size: 2.2rem; }
+.pcard.compact .statgrid { margin-top: 8px; gap: 4px; }
+.pcard.compact .stat { padding: 4px 0; }
+.pcard-meta {
+  display: flex; justify-content: space-between; gap: 8px;
+  font-size: .65rem; color: var(--muted); font-weight: 700; margin-top: 2px;
+}
+.pcard-kit {
+  height: 5px; margin: 10px -16px -14px;
+  background: linear-gradient(90deg, var(--kit), var(--kit2, #fff));
+}
+.pcard.compact .pcard-kit { margin: 8px -14px -10px; }
+
+/* ---- ML squad (decluttered: tap-to-act, position sections) ---- */
+.sqsec {
+  font-size: .68rem; font-weight: 800; letter-spacing: 1.2px; color: var(--gold);
+  margin: 12px 0 4px; text-transform: uppercase;
+}
+.sqrow { padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,.06); }
+.sqrow.xi { background: rgba(23,181,88,.08); margin: 0 -8px; padding: 8px; border-radius: 8px; border-bottom: none; }
+.sqrow.open { border-color: rgba(242,201,76,.25); }
+.sqmain { display: flex; align-items: center; gap: 8px; cursor: pointer; min-height: 28px; }
+.sqid { width: 46px; font-size: .75rem; font-weight: 800; color: var(--muted); flex-shrink: 0; }
+.sqrow.xi .sqid { color: var(--gold); }
+.sqname { flex: 1; font-size: .85rem; min-width: 0; }
+.sqovr { font-weight: 800; font-size: .95rem; }
+.sqsub { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.fitbar { flex: 1; height: 4px; background: rgba(255,255,255,.1); border-radius: 2px; overflow: hidden; }
+.fitbar i { display: block; height: 100%; }
+.sqact { display: flex; gap: 6px; margin-top: 8px; align-items: center; }
+.sqact .btn { margin: 0; padding: 8px 10px; font-size: .72rem; width: auto; flex: 1; min-height: 40px; }

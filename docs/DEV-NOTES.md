@@ -69,3 +69,9 @@ Hard-won knowledge from development. Check this before repeating an approach.
 - Match engine applies `skillsActive(skills, pos)` so a mis-saved Outside Curler on a GK never affects odds.
 - GK skills: Reflexes, Penalty Saver, Command of Area, High Claim, GK Long Ball (+ Captaincy, Fighting Spirit).
 - Tests: `game/test-position-skills.js`.
+
+## BaL cards + Squad declutter (v1.5.2)
+
+- BaL `playerCardHTML` always renders the 6-stat grid (home uses `.pcard.compact`). Dead `small && hide stats` path is gone.
+- ML Squad: position sections + tap-to-expand TRAIN/SELL. Help kv rows removed. `_sqOpen` is UI-only (not persisted meaningfully; fine if it rides along in the save).
+- Ghost region brackets: design in `docs/GHOST-REGIONS.md` — do not implement until owner picks the four options.
