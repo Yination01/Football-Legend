@@ -43,3 +43,10 @@ Sidebar → **Project Settings → API**. Send me these two values (they are SAF
 3. That account now has full admin rights in the web dashboard.
 
 That's it. After step 5, I plug the two values into the game + dashboard and everything lights up.
+
+## 7. v1.5 extras (Ghost PvP · Seasons · Owner hardening)
+
+1. **Re-run** `leaderboard.sql` (it is now idempotent and adds `leaderboard_ghosts`, `seasons`, `season_ranks`, `season_close`, `leaderboard_season`).
+2. Deploy edge function **`verify-owner`** from `functions/verify-owner/index.ts` (same dashboard-editor flow as step 4).
+3. Edge Function secrets → add `OWNER_KEY_HASH` = decimal string of `hashSeed("flown:"+yourKey)` (legacy default `1728818593` if unset).
+4. Admin console → **Seasons** tab appears after you reload; use it at month-end to snapshot boards + auto-gift top 3.

@@ -52,3 +52,11 @@ Hard-won knowledge from development. Check this before repeating an approach.
 - Live2D: 11/11 (replay lifecycle, you-marker per position, GK-career marking, zone drift).
 - Backup e2e: 10/10 (write→uninstall→restore, decline, corrupt file, no-plugin browser) + permission-handshake pass.
 - Attack states: 16/16 (thresholds, team direction, heat spike/decay, 160 canvas frames all states).
+
+## v1.5 notes
+
+- `app/copy-game.js` must point at `../game` (was a stale `../naija-legend` path — broke every APK content sync).
+- Owner key: NEVER re-introduce `FL_OWNER_HASH` into `app.js`. Verification is `Cloud.verifyOwner` → edge fn `verify-owner` using the same `hashSeed` as `engine.js` (FNV-ish with 1779033703 / 3432918353 — not the plain FNV-1a constants).
+- Ghost PvP depends on `FR_MENTS` / `FR_STYLES` / `frDuel` being declared **above** the ghost block in `app.js`.
+- `leaderboard.sql` is re-runnable (create or replace + drop policy if exists). Admins close seasons via `season_close` RPC; rewards land in `inbox` like any other gift.
+- Headless v1.5 harness: `game/test-v15.js` (stubs `window.addEventListener`, loads full app.js).

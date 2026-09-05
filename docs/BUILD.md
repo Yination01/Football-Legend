@@ -80,3 +80,14 @@ cmp assets/public/app.js game/app.js   # must be identical
 2. **Documents backup file** — `Documents/FootballLegend/backup.json`, rewritten (debounced 1.5s) after every save. Survives uninstall. On fresh boot with no saves, the app offers to restore from it. Android ≤10 requires one storage-permission prompt; 11+ is automatic (app-scoped Documents access).
 3. **Android Auto Backup** (`allowBackup="true"` in the manifest).
 4. Manual **backup codes** in Settings (base64 pack `{v:1,bal,ml}`) for cross-device moves.
+
+## Release APK / AAB (one command)
+
+```bash
+# Requires JDK 17, ANDROID_HOME, and app/android/keystore.properties
+./scripts/build-release.sh
+# → releases/FootballLegend-v1.4-release.apk
+# → releases/FootballLegend-v1.4-playstore.aab
+```
+
+`app/copy-game.js` copies from `../game` (plain filenames). Do not point it at any other folder.
