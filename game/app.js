@@ -2995,7 +2995,7 @@ function giftsScreen() {
     <div class="topbar"><div class="logo"><span class="brand1">GIFTS &</span> <span class="legend">EVENTS</span></div></div>
     <div class="panel">
       <h2>\ud83c\udf81 Live Events</h2>
-      ${live.length ? live.map(g => `<div class="kv"><span>${g.title}<br><span class="sub">until ${g.to}${g.pl ? " \u00b7 includes " + g.pl.name + " (" + g.pl.ovr + ")" : ""}</span></span><button class="btn" data-claimg="${g.id}" style="width:auto;padding:8px 14px">CLAIM</button></div>`).join("")
+      ${live.length ? live.map(g => `<div class="kv"><span>${g.title}<br><span class="sub">until ${g.to}${g.pl ? " \u00b7 includes " + g.pl.name + " (" + g.pl.ovr + ")" : ""}</span></span><button class="btn" data-claimg="${g.id}">CLAIM</button></div>`).join("")
         : '<p class="sub">No live events right now \u2014 new gifts arrive with updates and special dates. Check back!</p>'}
       ${flGiftClaimed().length ? `<p class="sub" style="margin-top:6px">\u2705 Claimed: ${flGiftClaimed().filter(i => !i.startsWith("code:")).length} event${flGiftClaimed().length > 1 ? "s" : ""}</p>` : ""}
     </div>

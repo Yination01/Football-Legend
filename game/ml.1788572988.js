@@ -589,7 +589,7 @@ function mlTacticsScreen() {
       <p class="sub">Changing formation re-picks your best XI automatically.</p></div>
     <div class="panel"><h2>Mentality</h2>
       <div class="optrow">${Object.entries(ML_MENT).map(([id, m]) =>
-        `<div class="opt ${M.mentality === id ? "sel" : ""}" data-ment="${id}" style="flex:1 1 30%">${m.label}<br><span class="sub">${m.desc}</span></div>`).join("")}</div>
+        `<div class="opt ${M.mentality === id ? "sel" : ""}" data-ment="${id}" style="flex:1 1 45%">${m.label}<br><span class="sub">${m.desc}</span></div>`).join("")}</div>
       <p class="sub">Honest modifiers, shown exactly as applied to team strength. XI now: <b>${mlTeamStr(0) + ML_MENT[M.mentality].you}</b> effective.</p></div>
     <div class="panel"><h2>Playing Style</h2>
       <div class="optrow">${Object.entries(ML_STYLES).map(([id, st]) =>
@@ -657,7 +657,7 @@ function mlMarketScreen() {
   }, 0);
   const row = (p) => `<div class="kv"><span><b>${mlRpos(p)}</b> ${p.name}${mlCardChip(p)}<br>
     <span class="sub">age ${p.age} \u00b7 OVR ${p.ovr}${p.pot > p.ovr ? "/" + p.pot : ""} \u00b7 ${p.wage}K/wk${(p.skills || []).length ? " \u00b7 \ud83c\udfaf " + p.skills.join(", ") : ""}</span></span>
-    <button class="btn ${p.card ? "gold" : "secondary"}" data-buy="${p.id}" style="padding:6px 10px;font-size:.7rem">${p.lcPrice ? p.lcPrice + " LC" : fmtM(Math.round(p.value * 10) / 10)}</button></div>`;
+    <button class="btn ${p.card ? "gold" : "secondary"}" data-buy="${p.id}">${p.lcPrice ? p.lcPrice + " LC" : fmtM(Math.round(p.value * 10) / 10)}</button></div>`;
   return `<div class="screen">${mlTopbar()}
     ${star ? `<div class="panel"><h2>\u2b50 Available: your Legend</h2><p class="sub">Your Become a Legend player, exported to this market.</p>${row(star)}</div>` : ""}
     <div class="panel"><h2>Transfer Market <span class="badge gold">WEEK ${mlMarketWeek() % 52 + 1}</span></h2>
@@ -1135,7 +1135,7 @@ function mlMatchScreen(fx, displayedProbs) {
       decEl.innerHTML = `<div class="scenline">${kind === "ht" ? "\ud83d\udde3 HALF-TIME TEAM TALK" : "\ud83d\udccb TACTICAL WINDOW \u2014 " + match.state.min + "'"} \u00b7 ${match.state.gH}-${match.state.gA}</div>
         <p class="sub" style="margin:4px 0">Mentality (honest str mods):</p>
         <div class="optrow">${Object.entries(ML_MENT).map(([id, m]) =>
-          `<div class="opt ${ment === id ? "sel" : ""}" data-wment="${id}" style="flex:1 1 30%;font-size:.7rem">${m.label}</div>`).join("")}</div>
+          `<div class="opt ${ment === id ? "sel" : ""}" data-wment="${id}" style="flex:1 1 45%;font-size:.7rem">${m.label}</div>`).join("")}</div>
         <p class="sub" style="margin:6px 0 2px">Subs left: <b>${subsLeft}</b> \u00b7 tap tired \u2192 pick fresh:</p>
         <div id="mlsubui">${tired.map(t => `<div class="opt" data-tired="${t.p.id}" style="font-size:.68rem;margin:2px 0">OFF: ${mlRpos(t.p)} ${t.p.name} \u00b7 fit ${Math.max(0, Math.round(t.cur))}%</div>`).join("")}</div>
         <button class="btn" id="mlresume">RESUME \u25b6</button>`;
