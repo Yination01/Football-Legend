@@ -78,7 +78,8 @@ const appTxt = fs.readFileSync(path.join(__dirname, "app.js"), "utf8");
 const cloudTxt = fs.readFileSync(path.join(__dirname, "cloud.js"), "utf8");
 const sqlTxt = fs.readFileSync(path.join(__dirname, "supabase/leaderboard.sql"), "utf8");
 const voTxt = fs.readFileSync(path.join(__dirname, "supabase/functions/verify-owner/index.ts"), "utf8");
-const cgTxt = fs.readFileSync(path.join(__dirname, "../app/copy-game.js"), "utf8");
+const cgPath = [path.join(__dirname, "../app/copy-game.js"), "/home/user/football-legend-app/copy-game.js"].find(p => fs.existsSync(p));
+const cgTxt = fs.readFileSync(cgPath, "utf8");
 const adminTxt = fs.readFileSync(path.join(__dirname, "admin/admin.js"), "utf8");
 
 check("no FL_OWNER_HASH in app.js", !appTxt.includes("FL_OWNER_HASH"));

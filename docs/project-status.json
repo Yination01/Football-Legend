@@ -1,0 +1,136 @@
+{
+  "project": "Football Legend",
+  "generated": "2026-09-05",
+  "concept": "eFootball-style card/purchase meta, simulated & spectated matches (no 3D modelling), realistic fictional global identity, never-rigged simulation (displayed odds = true engine odds), dual currency (GP + Legend Coins), $0 budget",
+  "repo": "https://github.com/Yination01/Football-Legend (main @ a63663c)",
+  "live_urls": {
+    "web_game": "https://yination01.github.io/Football-Legend/game/",
+    "admin_console": "https://yination01.github.io/Football-Legend/game/admin/",
+    "backend": "https://cdrcibinjssyqdufeqmk.supabase.co (Supabase free tier)"
+  },
+
+  "what_has_been_done": {
+    "v1.0_v1.1_core_game": [
+      "Become a Legend: full career mode — create player, matches with decision panel, training with per-position OVR impact, skills, transfers, cup, awards, objectives, 2D live view with attack arrows, 3D freeze-proof cutscenes, commentary, hold/FK/GK realism tuning",
+      "Master League: eFootball Dream Team style — one save forever, squad building, packs with legendary chances, trainers, weekly market, gate-receipt finances (losses never deduct money), cutscene parity, bench of 10 + league sub rules",
+      "Friend Match v3: challenge codes (pass-and-play rejected by design), editable sub counts",
+      "Card system: standard(0 skills)/trending(1)/showtime(2)/bigtime(3)/legendary(4), visually distinct tiers, free legendary pick for all accounts",
+      "Fairness: displayed odds = engine's true odds, enforced by 21 unit tests; results irreversible at kickoff (no money-duplication exploits)",
+      "Saves survive uninstall/reinstall (file backup + Android backup + backup codes)"
+    ],
+    "v1.2_world_update": [
+      "6-league galaxy fully simulated in both modes",
+      "Champions Trophy in both modes (groups + knockout, CT nights)",
+      "Cross-league transfers + January window",
+      "Weekly rotating market, Account panel with permanent Player ID",
+      "Ball-crest logo, position enforcement, game plans that genuinely influence matches"
+    ],
+    "v1.3_retirements_gifts_owner": [
+      "BaL: age 17 start, retire option from 35 (2-tap), forced at 45, age decline 35+ (legendary immune), Hall of Fame (last 20 legends)",
+      "ML: squad retirements 35-45 with farewell payout + free academy regen (17-19, high potential)",
+      "Gift events (date-windowed, in-app) + offline redeem codes (hash-verified, single-use per device)",
+      "Owner panel: hidden unlock (7 taps on Player ID + secret key), currency grants, player spawning, code generator, engine debug",
+      "Shipped as APK/AAB versionCode 4, on GitHub releases/"
+    ],
+    "v1.4_cloud_update_CURRENT": [
+      "Supabase backend live: Postgres schema (10 tables), row-level security on everything",
+      "Google sign-in: web (working) + native Android flow (PKCE + system browser + deep link com.footballlegend.game://callback)",
+      "Server-validated cloud saves: anti-cheat gate rejects impossible stats/currency/rollbacks; 14 validator tests; flagged players logged",
+      "Server-side redeem codes: globally single/multi-use, race-safe, expiring",
+      "Cloud gift inbox: admin gifts any player remotely, delivered on next session",
+      "Live-ops events: create/edit events from admin console, NO app update needed (5-min propagation)",
+      "Broadcasts: admin message shows as gold banner on every player's main menu",
+      "Admin web console (Poise-style): Overview + DAU chart + top-5 boards, Players (search/inspect/gift/ban), Events, Codes, Broadcast, Flagged (anti-cheat), Admins",
+      "Global Rankings in-game: Legends board (by reputation) + Clubs board (by trophies), server-computed from validated saves only, banned players excluded",
+      "ML competitions hub: all 6 galaxy league tables + CT group/knockout panel inside ML (parity with BaL)",
+      "Gift history screen (last 30 rewards)",
+      "Fixed: cloud-event claim bug, HoF duplication, menu boot-order crash",
+      "Everything pushed to GitHub, Pages live, offline play 100% preserved when signed out"
+    ],
+    "infrastructure": [
+      "Test suites: 21 fairness + ~358 ML + 27 ML-CT + 25 BaL-CT + 58 v1.3/v1.4 features — all green",
+      "Capacitor Android project: versionCode 5 / '1.4' staged, signing keystore configured, low-memory gradle settings",
+      "GitHub Pages auto-deploys on push",
+      "Play Store path documented (store/LAUNCH-CHECKLIST.md); $25 fee deferred until revenue"
+    ]
+  },
+
+  "what_is_currently_being_done": {
+    "status": "v1.4 code-complete; awaiting your actions below before final APK build",
+    "waiting_on_user": [
+      {
+        "task": "Run leaderboard SQL",
+        "how": "Supabase > SQL Editor > paste game/supabase/leaderboard.sql from GitHub > Run",
+        "why": "Global Rankings shows 'loading' forever without it",
+        "time": "30 seconds"
+      },
+      {
+        "task": "Add redirect URLs in Supabase",
+        "how": "Authentication > URL Configuration > Redirect URLs: add https://yination01.github.io/Football-Legend/game/ AND com.footballlegend.game://callback",
+        "why": "web sign-in + APK sign-in both fail without these",
+        "time": "1 minute"
+      },
+      {
+        "task": "Make yourself admin",
+        "how": "Sign into the game with Google once, then Supabase SQL: insert into admins (uid) select uid from profiles where player_id = 'YOUR-FL-ID';",
+        "why": "unlocks the admin console for your account",
+        "time": "2 minutes"
+      },
+      {
+        "task": "Revoke the GitHub PAT",
+        "why": "it is still active and no longer needed",
+        "time": "30 seconds"
+      }
+    ]
+  },
+
+  "what_should_be_done_next": {
+    "immediate": [
+      "You: complete the 4 waiting_on_user tasks",
+      "You: test the web game + admin console end-to-end (sign in, gift yourself, create an event, publish a broadcast, redeem a code, check rankings)",
+      "Me: build final v1.4 APK + AAB (versionCode 5) after your cloud config is confirmed — REMINDER: the callback redirect URL MUST be in Supabase first or in-app Google sign-in fails",
+      "You: install APK on your phone, run the 10-point device test plan (docs/V14-RELEASE-CHECKLIST.md)"
+    ],
+    "v1.5_candidates_in_suggested_order": [
+      {
+        "feature": "Ghost PvP",
+        "detail": "async matches vs real players' cloud teams (Friend Match evolution, long-planned) — now feasible because cloud profiles + validated squads exist",
+        "effort": "medium-large"
+      },
+      {
+        "feature": "Cloud-linked owner panel hardening",
+        "detail": "move owner-key verification server-side so even the hash isn't in the APK",
+        "effort": "small"
+      },
+      {
+        "feature": "Broadcast/news inbox screen",
+        "detail": "in-game history of announcements instead of banner-only",
+        "effort": "small"
+      },
+      {
+        "feature": "Leaderboard seasons",
+        "detail": "monthly snapshots + rewards for top ranks (auto-gifts via inbox)",
+        "effort": "medium"
+      }
+    ],
+    "launch_track": [
+      "Closed testing with friends via the web link + shared APK",
+      "Google Play: $25 developer account when revenue plan is ready, upload the -playstore.aab, follow store/LAUNCH-CHECKLIST.md",
+      "Publish Google OAuth consent screen from Testing to Production before public launch (currently fine for you/testers)"
+    ],
+    "deferred_by_design": [
+      "Real-time online PvP (needs matchmaking infra; ghost PvP first)",
+      "3D match rendering (permanently out of scope per concept)",
+      "Paid assets/services (until revenue exists)"
+    ]
+  },
+
+  "whats_left_known_gaps": [
+    "Final v1.4 APK/AAB not yet built (blocked only on your Supabase config; 10 minutes of build time once cleared)",
+    "v1.4 binaries not yet in repo releases/ (current releases are v1.3-era)",
+    "Leaderboard RPCs not yet installed in your Supabase (your 30-second task)",
+    "Google OAuth consent screen still in Testing mode (fine now, must publish before public launch)",
+    "Native Android sign-in untestable in sandbox — first real test happens on your phone",
+    "Residual anti-cheat limit (accepted): offline device-memory editing affects only the cheater's own offline game; cloud, rankings, codes and other players are protected"
+  ]
+}
