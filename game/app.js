@@ -3304,15 +3304,15 @@ function newsInboxScreen() {
     });
     const mark = $("#newsmark"); if (mark) mark.onclick = () => {
       (FL_NEWS_CACHE || []).forEach(n => flNewsMark(n.id));
-      toast("\u2705 All marked read"); render(newsInboxScreen);
+      toast("✅ All marked read"); render(newsInboxScreen);
     };
     $("#newsback").onclick = () => render(menuScreen);
   }, 0);
   const rows = FL_NEWS_CACHE;
   let body;
-  if (!window.Cloud || !Cloud.enabled()) body = '<p class="sub">News inbox needs the online service.</p>';
-  else if (rows == null) body = '<p class="sub">\u23f3 Loading announcements\u2026</p>';
-  else if (!rows.length) body = '<p class="sub">No announcements yet. When the admin publishes a broadcast, it lands here.</p>';
+  if (!window.Cloud || !Cloud.enabled()) body = '<p class="sub">Connect online to sync live server broadcasts and event announcements.</p>';
+  else if (rows == null) body = '<p class="sub">⏳ Loading announcements…</p>';
+  else if (!rows.length) body = '<p class="sub">No live server broadcasts right now. Patch notes and permanent updates appear above.</p>';
   else {
     const read = new Set(flNewsRead());
     const today = new Date().toISOString().slice(0, 10);
@@ -3320,20 +3320,34 @@ function newsInboxScreen() {
       const live = n.starts_at <= today && n.ends_at >= today;
       const isNew = n.id && !read.has(String(n.id));
       return `<div class="panel" data-news="${n.id || ""}" style="cursor:pointer${isNew ? ";border-color:var(--gold)" : ""}">
-        <div class="kv"><span>${live ? "\ud83d\udce2 LIVE" : "\ud83d\udccb"} ${isNew ? '<b style="color:var(--gold)">NEW</b> ' : ""}
-        <span class="sub">${n.created_at ? new Date(n.created_at).toLocaleDateString() : (n.starts_at || "")}${n.ends_at ? " \u2192 " + n.ends_at : ""}</span></span></div>
+        <div class="kv"><span>${live ? "📢 LIVE" : "📋"} ${isNew ? '<b style="color:var(--gold)">NEW</b> ' : ""}
+        <span class="sub">${n.created_at ? new Date(n.created_at).toLocaleDateString() : (n.starts_at || "")}${n.ends_at ? " → " + n.ends_at : ""}</span></span></div>
         <p style="margin:4px 0 0;line-height:1.45">${String(n.message || "").replace(/</g, "&lt;")}</p>
       </div>`;
     }).join("");
   }
   return `<div class="screen">
-    <div class="topbar"><div class="logo"><span class="brand1">NEWS</span> <span class="legend">INBOX</span></div></div>
-    <div class="panel"><h2>\ud83d\udce2 Announcements</h2>
+    <div class="topbar">
+      <div class="logo"><span class="brand1">NOTICES &</span> <span class="legend">NEWS</span></div>
+      <span class="badge gold" style="font-size:.72rem">v1.5 (Build 6)</span>
+    </div>
+    <div class="panel" style="border:1px solid var(--gold);background:rgba(255,215,94,.05)">
+      <div class="kv"><span style="color:var(--gold);font-weight:800;font-size:.9rem">⚡ WHAT'S NEW IN v1.5 / BUILD 6</span><span class="sub">Latest Patch</span></div>
+      <ul style="margin:8px 0 0;padding-left:18px;line-height:1.5;font-size:.82rem;color:var(--sub)">
+        <li><b style="color:var(--text)">👻 Ghost PvP:</b> Challenge real players' cloud squads asynchronously with the honest match engine.</li>
+        <li><b style="color:var(--text)">🌐 Global Rankings & Monthly Seasons:</b> Real-time leaderboards with top-3 auto season gifts.</li>
+        <li><b style="color:var(--text)">🛡️ Secure Cloud Saves:</b> Multi-layer backup + server-side anti-cheat save validation.</li>
+        <li><b style="color:var(--text)">📱 Mobile UI Refinements:</b> Optimized card progression, market views, and tactics on narrow phones.</li>
+        <li><b style="color:var(--text)">🎯 Position-Conscious Skills:</b> Goalkeepers and defenders receive position-tailored traits.</li>
+        <li><b style="color:var(--text)">🌱 Academy Regens:</b> 17-year-old youth talents in Master League.</li>
+      </ul>
+    </div>
+    <div class="panel"><h2>📢 Server Announcements</h2>
       <p class="sub">Every admin broadcast, newest first. Tap to mark read.</p></div>
     ${body}
     <div class="optrow">
       <button class="btn secondary" id="newsmark" style="flex:1">Mark all read</button>
-      <button class="btn secondary" id="newsback" style="flex:1">\u2b05 Main Menu</button>
+      <button class="btn secondary" id="newsback" style="flex:1">⬅ Main Menu</button>
     </div>
   </div>`;
 }
@@ -3353,6 +3367,7 @@ function menuScreen() {
   let mlInfo = null;
   try { const m = JSON.parse(localStorage.getItem("footballLegendML_v1")); if (m && !m.sacked) mlInfo = m; } catch (e) {}
   setTimeout(() => {
+    const tn = $("#topnotices"); if (tn) tn.onclick = () => render(newsInboxScreen);
     $("#gobal").onclick = () => { localStorage.setItem("flMode", "bal"); render(S ? homeScreen : createScreen); };
     $("#goml").onclick = () => { if (window.ML) ML.enter(); else toast("Loading..."); };
     if (!getSet().seenIntro) {
@@ -3360,13 +3375,13 @@ function menuScreen() {
       ov.id = "introov";
       ov.style.cssText = "position:fixed;inset:0;background:rgba(6,10,8,.94);z-index:99;display:flex;align-items:center;justify-content:center;padding:20px";
       ov.innerHTML = `<div style="max-width:420px">
-        <h1 style="margin:0 0 4px">\u26bd Welcome, gaffer.</h1>
+        <h1 style="margin:0 0 4px">⚽ Welcome, gaffer.</h1>
         <p class="sub" style="margin:0 0 14px">60 seconds, three things to know:</p>
-        <div class="panel" style="margin:8px 0"><b>\u2b50 Become a Legend</b><p class="sub" style="margin:4px 0 0">Create ONE player, live their whole career. During matches YOU make the big calls \u2014 shoot, pass, hold \u2014 with honest odds shown for every choice.</p></div>
-        <div class="panel" style="margin:8px 0"><b>\ud83c\udfc6 Master League</b><p class="sub" style="margin:4px 0 0">Build a squad from card packs, set tactics, climb the leagues. One save \u2014 your club's story is permanent.</p></div>
-        <div class="panel" style="margin:8px 0"><b>\ud83e\udd1d Friend Match</b><p class="sub" style="margin:4px 0 0">Export your squad as a code. Friends import it and try to beat you.</p></div>
-        <p class="sub" style="margin:10px 0">The engine is never scripted \u2014 the odds you see are the odds you get. Good luck.</p>
-        <button class="btn" id="introgo" style="width:100%">LET'S GO \u2794</button>
+        <div class="panel" style="margin:8px 0"><b>⭐ Become a Legend</b><p class="sub" style="margin:4px 0 0">Create ONE player, live their whole career. During matches YOU make the big calls — shoot, pass, hold — with honest odds shown for every choice.</p></div>
+        <div class="panel" style="margin:8px 0"><b>🏆 Master League</b><p class="sub" style="margin:4px 0 0">Build a squad from card packs, set tactics, climb the leagues. One save — your club's story is permanent.</p></div>
+        <div class="panel" style="margin:8px 0"><b>🤝 Friend Match</b><p class="sub" style="margin:4px 0 0">Export your squad as a code. Friends import it and try to beat you.</p></div>
+        <p class="sub" style="margin:10px 0">The engine is never scripted — the odds you see are the odds you get. Good luck.</p>
+        <button class="btn" id="introgo" style="width:100%">LET'S GO ➔</button>
       </div>`;
       document.body.appendChild(ov);
       $("#introgo").onclick = () => { setSet("seenIntro", true); ov.remove(); };
@@ -3383,40 +3398,46 @@ function menuScreen() {
   const liveGifts = flGiftsLive().length;
   const newsN = flNewsUnread();
   return `<div class="screen">
-    <div class="topbar"><div class="logo"><span class="brand1">FOOTBALL</span> <span class="legend">LEGEND</span></div></div>
-    ${FL_BROADCAST ? `<div class="panel" style="border:1px solid #e8c35a;background:#1c180c"><b style="color:#e8c35a">\ud83d\udce2 ANNOUNCEMENT</b><p class="sub" style="margin-top:4px">${FL_BROADCAST.replace(/</g, "&lt;")}</p></div>` : ""}
-    <div class="panel center"><h1>\u26bd FOOTBALL LEGEND</h1>
+    <div class="topbar">
+      <div class="logo"><span class="brand1">FOOTBALL</span> <span class="legend">LEGEND</span></div>
+      <button class="chip" id="topnotices" style="cursor:pointer;background:var(--panel);border:1px solid ${newsN ? "var(--gold)" : "var(--line)"};color:var(--text);display:flex;align-items:center;gap:6px">
+        <span style="font-size:1.05rem">🔔</span>
+        ${newsN ? `<span class="badge gold" style="font-size:.65rem;padding:2px 6px">${newsN} NEW</span>` : '<span class="sub" style="font-size:.72rem">Notices</span>'}
+      </button>
+    </div>
+    ${FL_BROADCAST ? `<div class="panel" style="border:1px solid #e8c35a;background:#1c180c"><b style="color:#e8c35a">📢 ANNOUNCEMENT</b><p class="sub" style="margin-top:4px">${FL_BROADCAST.replace(/</g, "&lt;")}</p></div>` : ""}
+    <div class="panel center"><h1>⚽ FOOTBALL LEGEND</h1>
       <p class="sub" style="margin-top:6px">Honest engine. Real odds. No scripts.</p></div>
     <div class="panel" style="cursor:pointer" id="gobal">
-      <h2>\u2b50 Become a Legend</h2>
-      <p class="sub">${S ? `Continue: <b>${S.name}</b> \u00b7 ${S.pos} \u00b7 ${cardLabel()} \u00b7 Season ${S.season}` : "Create your player and rise from the lower leagues."}</p>
+      <h2>⭐ Become a Legend</h2>
+      <p class="sub">${S ? `Continue: <b>${S.name}</b> · ${S.pos} · ${cardLabel()} · Season ${S.season}` : "Create your player and rise from the lower leagues."}</p>
     </div>
     <div class="panel" style="cursor:pointer" id="goml">
-      <h2>\ud83c\udfdf\ufe0f Master League</h2>
-      <p class="sub">${mlInfo ? `Continue: <b>${mlInfo.clubName || mlInfo.world.clubs[mlInfo.clubIdx].name}</b> \u00b7 Season ${mlInfo.season}${(mlInfo.trophies && mlInfo.trophies.length) ? " \u00b7 \ud83c\udfc6" + mlInfo.trophies.length : ""} \u00b7 budget ${(mlInfo.budget || 0).toFixed(1)}M GP` : "Found your own club and build a dynasty \u2014 one save, forever, like eFootball."}</p>
+      <h2>🏟️ Master League</h2>
+      <p class="sub">${mlInfo ? `Continue: <b>${mlInfo.clubName || mlInfo.world.clubs[mlInfo.clubIdx].name}</b> · Season ${mlInfo.season}${(mlInfo.trophies && mlInfo.trophies.length) ? " · 🏆" + mlInfo.trophies.length : ""} · budget ${(mlInfo.budget || 0).toFixed(1)}M GP` : "Found your own club and build a dynasty — one save, forever, like eFootball."}</p>
     </div>
     ${!S && !localStorage.getItem("footballLegendML_v1") ? `<div class="panel" style="border-color:var(--gold)">
-      <p class="sub">\ud83d\udc4b <b>New here?</b> This game's promise: every % you see is the engine's true probability \u2014 matches are never scripted. Read <b style="color:var(--gold)">How it works</b> below, then create your legend.</p>
+      <p class="sub">👋 <b>New here?</b> This game's promise: every % you see is the engine's true probability — matches are never scripted. Read <b style="color:var(--gold)">How it works</b> below, then create your legend.</p>
     </div>` : ""}
     <div class="panel" style="cursor:pointer" id="gofr">
-      <h2>\ud83c\udfae Friend Match (Challenge Codes)</h2>
-      <p class="sub">Set up a match, send the code. Your friend plays the identical honest match on their own phone \u2014 then sends the result code back so you can watch it too.</p>
+      <h2>🎮 Friend Match (Challenge Codes)</h2>
+      <p class="sub">Set up a match, send the code. Your friend plays the identical honest match on their own phone — then sends the result code back so you can watch it too.</p>
     </div>
     <div class="panel" style="cursor:pointer" id="goghost">
-      <h2>\ud83d\udc7b Ghost PvP</h2>
-      <p class="sub">Challenge real players' cloud clubs \u2014 async, AI-controlled, same honest engine. No matchmaking server needed.</p>
+      <h2>👻 Ghost PvP</h2>
+      <p class="sub">Challenge real players' cloud clubs — async, AI-controlled, same honest engine. No matchmaking server needed.</p>
     </div>
     <div class="panel" style="cursor:pointer${newsN ? ";border-color:var(--gold)" : ""}" id="gonews">
-      <h2>\ud83d\udce2 News Inbox${newsN ? ` <span class="badge gold" style="float:right">${newsN} NEW</span>` : ""}</h2>
-      <p class="sub">Every announcement from the admin console \u2014 history, not just the banner.</p>
+      <h2>📢 News Inbox${newsN ? ` <span class="badge gold" style="float:right">${newsN} NEW</span>` : ""}</h2>
+      <p class="sub">Every announcement from the admin console — history, not just the banner.</p>
     </div>
     <div class="panel" style="cursor:pointer${liveGifts ? ";border-color:var(--gold)" : ""}" id="gogifts">
-      <h2>\ud83c\udf81 Gifts & Events${liveGifts ? ` <span class="badge gold" style="float:right">${liveGifts} LIVE</span>` : ""}</h2>
-      <p class="sub">Free players, GP and Legend Coins \u2014 event drops and redeem codes. Everything a gift, nothing pay-to-win.</p>
+      <h2>🎁 Gifts & Events${liveGifts ? ` <span class="badge gold" style="float:right">${liveGifts} LIVE</span>` : ""}</h2>
+      <p class="sub">Free players, GP and Legend Coins — event drops and redeem codes. Everything a gift, nothing pay-to-win.</p>
     </div>
     <div class="panel" style="cursor:pointer" id="golb">
-      <h2>\ud83c\udf10 Global Rankings</h2>
-      <p class="sub">Top legends and clubs worldwide \u2014 signed-in players only. Where do you stand?</p>
+      <h2>🌐 Global Rankings</h2>
+      <p class="sub">Top legends and clubs worldwide — signed-in players only. Where do you stand?</p>
     </div>
     ${flIsOwner() ? `<div class="panel" style="cursor:pointer;border-color:var(--gold)" id="goowner">
       <h2>\ud83d\udc51 Owner Panel</h2>
