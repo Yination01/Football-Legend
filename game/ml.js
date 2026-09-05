@@ -60,12 +60,19 @@ const ML_CARDS = {
   bigtime:   { label: "BIG TIME",  skills: 3, cls: "cardbig",   boost: 4, desc: "+4 OVR in cup ties, vs top-3 clubs & final 3 MDs", lc: 40 },
   legendary: { label: "LEGENDARY", skills: 4, cls: "cardleg",   boost: 3, desc: "+3 OVR always \u00b7 never ages down \u00b7 form never negative", lc: 80 }
 };
-const ML_SKILLS = ["Outside Curler","Long Range Drive","First-time Shot","Chip Shot Control","Heading","Acrobatic Finishing","Through Passing","Pinpoint Crossing","One-touch Pass","Captaincy","Fighting Spirit","Super-sub","Track Back","Penalty Specialist"];
+// Skills are position-gated via Engine.skillsFor(rpos). GKs get Reflexes/Penalty Saver/etc — never Outside Curler.
 function mlGiveSkills(p, rng) { // skill count follows card tier
   const n = p.cardId ? ML_CARDS[p.cardId].skills : 0;
-  const pool = ML_SKILLS.slice();
+  const rpos = mlRpos(p);
+  const pool = (E.skillsFor ? E.skillsFor(rpos) : []).slice();
   p.skills = [];
   for (let i = 0; i < n && pool.length; i++) p.skills.push(pool.splice(Math.floor(rng() * pool.length), 1)[0]);
+}
+function mlSanitizeSkills(p) {
+  if (!p) return;
+  const rpos = mlRpos(p);
+  if (E.skillsActive) p.skills = E.skillsActive(p.skills || [], rpos);
+  else p.skills = p.skills || [];
 }
 function mlCardChip(p) { // unmistakable tier visuals
   if (!p.cardId && !p.card) return "";
@@ -101,6 +108,7 @@ function mlLoad() {
         if (p.skills === undefined) mlGiveSkills(p, rng);
       }
       if (p.skills === undefined) { p.skills = []; }
+      mlSanitizeSkills(p);
     }
   }
 }

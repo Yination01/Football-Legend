@@ -426,19 +426,10 @@ function bindNav() {
 }
 
 // ---- PES-style skills: hybrid acquisition (2 milestone slots + 3 purchasable) ----
-const BAL_SKILL_POOL = {
-  GK:  ["Track Back", "Captaincy", "Penalty Specialist", "Long Range Drive"],
-  CB:  ["Heading", "Captaincy", "Track Back", "First-time Shot"],
-  LB:  ["Pinpoint Crossing", "Track Back", "One-touch Pass", "Captaincy"],
-  RB:  ["Pinpoint Crossing", "Track Back", "One-touch Pass", "Captaincy"],
-  DMF: ["Through Passing", "Long Range Drive", "Track Back", "Captaincy", "One-touch Pass"],
-  CMF: ["Through Passing", "One-touch Pass", "Long Range Drive", "Captaincy", "Outside Curler"],
-  AMF: ["Through Passing", "Outside Curler", "First-time Shot", "Chip Shot Control", "One-touch Pass", "Penalty Specialist"],
-  LWF: ["Outside Curler", "Pinpoint Crossing", "First-time Shot", "Acrobatic Finishing", "Chip Shot Control"],
-  RWF: ["Outside Curler", "Pinpoint Crossing", "First-time Shot", "Acrobatic Finishing", "Chip Shot Control"],
-  SS:  ["First-time Shot", "Chip Shot Control", "Acrobatic Finishing", "Outside Curler", "Penalty Specialist", "Fighting Spirit"],
-  CF:  ["First-time Shot", "Heading", "Acrobatic Finishing", "Penalty Specialist", "Fighting Spirit", "Chip Shot Control"]
-};
+// Pool is ALWAYS position-gated via Engine.skillsFor — never hand-roll a GK Outside Curler.
+function balSkillPool(pos) {
+  return (E.skillsFor && E.skillsFor(pos || (S && S.pos) || "CF")) || [];
+}
 function balSkillSlots() {
   let slots = 0;
   if (S.career.totalApps >= 20) slots++;
@@ -449,7 +440,12 @@ function balSkillSlots() {
 const BAL_SKILL_SLOT_COST = [{ gp: 5000 }, { gp: 15000 }, { lc: 30 }];
 function skillsScreen() {
   const slots = balSkillSlots();
-  const pool = BAL_SKILL_POOL[S.pos] || BAL_SKILL_POOL.CF;
+  const pool = balSkillPool(S.pos);
+  // Drop any illegal leftovers (e.g. old saves that learned Long Range Drive as GK)
+  if (E.skillsActive) {
+    const cleaned = E.skillsActive(S.skills || [], S.pos);
+    if (cleaned.length !== (S.skills || []).length) { S.skills = cleaned; save(); }
+  }
   const learned = S.skills || [];
   const nextBuy = (S.skillSlotsBought || 0) < 3 ? BAL_SKILL_SLOT_COST[S.skillSlotsBought || 0] : null;
   setTimeout(() => {
@@ -457,6 +453,7 @@ function skillsScreen() {
       const sk = b.dataset.learn;
       if ((S.skills || []).length >= balSkillSlots()) { toast("No free skill slots"); return; }
       if (S.skills.includes(sk)) return;
+      if (E.skillLegal && !E.skillLegal(sk, S.pos)) { toast("\u274c Not available for " + S.pos); return; }
       S.skills.push(sk); save(); toast("\ud83c\udfaf Learned: " + sk); render(skillsScreen);
     });
     const buy = $("#buyslot");
@@ -473,13 +470,15 @@ function skillsScreen() {
   const effects = { "Outside Curler": "FK curler +18%, shots +4%", "Long Range Drive": "shots +6%, FK power +10%",
     "First-time Shot": "shots +8%", "Chip Shot Control": "panenka +25%", "Heading": "shots +5%",
     "Acrobatic Finishing": "shots +7%", "Through Passing": "passes +10%", "Pinpoint Crossing": "FK cross +15%, passes +5%",
-    "One-touch Pass": "passes +8%", "Captaincy": "leadership \u2014 team lift", "Fighting Spirit": "shots & passes +12% when losing after 70'",
-    "Super-sub": "boost when subbed on", "Track Back": "GK saves +2%", "Penalty Specialist": "penalties +12%" };
+    "One-touch Pass": "passes +8%", "Captaincy": "leadership \u2014 team lift", "Fighting Spirit": "+12% when losing after 70'",
+    "Super-sub": "boost when subbed on", "Track Back": "tackle success +4%", "Penalty Specialist": "penalties +12%",
+    "Reflexes": "saves +8%", "Penalty Saver": "penalty saves +18%", "Command of Area": "rush saves +6%, fewer blunders",
+    "High Claim": "stay-big +3%", "GK Long Ball": "distribution +10%" };
   return `<div class="screen">
     <div class="topbar"><div class="logo"><span class="brand1">PLAYER</span> <span class="legend">SKILLS</span></div>
       <div class="wallet"><span class="chip">\ud83d\udfe2 ${S.gp} GP</span><span class="chip gold">\ud83e\ude99 ${S.nl} LC</span></div></div>
-    <div class="panel"><h2>\ud83c\udfaf Skills \u00b7 ${learned.length}/${slots} slots used</h2>
-      <p class="sub">Skills honestly change your decision odds \u2014 boosts are baked into the numbers you see in matches.
+    <div class="panel"><h2>\ud83c\udfaf Skills \u00b7 ${S.pos} \u00b7 ${learned.length}/${slots} slots used</h2>
+      <p class="sub">Only skills legal for <b>${S.pos}</b> appear here (a GK never learns Outside Curler). Boosts are baked into the odds you see in matches.
       Slot 1: 20 career apps ${S.career.totalApps >= 20 ? "\u2705" : "(" + S.career.totalApps + "/20)"} \u00b7 Slot 2: first trophy/award ${((S.flags.cupsWon || 0) > 0 || S.career.seasons.some(x => x.award)) ? "\u2705" : "\u23f3"} \u00b7 3 more purchasable.</p>
       ${nextBuy ? `<button class="btn secondary" id="buyslot">\ud83d\udd13 UNLOCK SLOT \u00b7 ${nextBuy.gp ? nextBuy.gp + " GP" : nextBuy.lc + " LC"}</button>` : ""}
     </div>
@@ -995,8 +994,20 @@ function previewScreen() {
       o.classList.add("sel"); S.role = o.dataset.role; save();
     });
     document.querySelectorAll("[data-pickpos]").forEach(p => p.onclick = () => {
-      S.pos = p.dataset.pickpos; save();
-      render(previewScreen); // re-render: OVR + odds context update
+      S.pos = p.dataset.pickpos;
+      // Keep playstyle legal for the new position (GK styles vs outfield)
+      const styles = E.stylesFor(S.pos) || [];
+      if (styles.length && !styles.some(s => s.id === S.playstyle)) {
+        S.playstyle = styles[0].id;
+        toast("Playstyle set to " + styles[0].label + " (fits " + S.pos + ")");
+      }
+      // Game plan roles are position-gated too
+      const roles = E.rolesFor(S.pos) || {};
+      if (!roles[S.role]) {
+        S.role = Object.keys(roles)[0] || "balanced";
+      }
+      save();
+      render(previewScreen); // re-render: OVR + odds + plan update
     });
     $("#kickoff").onclick = () => { render(() => matchScreen(fx, probs)); };
   }, 0);
@@ -3214,6 +3225,16 @@ if (S) {
   S.upgrades = S.upgrades || { fitness: 0, medical: 0, agentNet: 0 };
   S.skills = S.skills || []; S.skillSlotsBought = S.skillSlotsBought || 0;
   if (S.loginStreak === undefined) { S.lastLogin = null; S.loginStreak = 0; }
+  // Strip skills illegal for current position (e.g. old GK saves with Outside Curler)
+  if (E.skillsActive) {
+    const cleaned = E.skillsActive(S.skills, S.pos);
+    if (cleaned.length !== S.skills.length) { S.skills = cleaned; try { save(); } catch (e) {} }
+  }
+  // Ensure playstyle still legal for pos
+  if (E.stylesFor) {
+    const st = E.stylesFor(S.pos) || [];
+    if (st.length && !st.some(x => x.id === S.playstyle)) { S.playstyle = st[0].id; try { save(); } catch (e) {} }
+  }
 }
 // migration: older saves used positions/fields that no longer exist
 if (S && (!E.POSITIONS[S.pos] || !S.playstyle)) { S = null; localStorage.removeItem(SAVE_KEY); }
