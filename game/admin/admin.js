@@ -39,7 +39,7 @@ function renderLock(signedButNotAdmin) {
     '<p class="muted" style="margin-bottom:18px">Admin Console</p>' +
     (signedButNotAdmin
       ? '<div class="panel"><p>Signed in as <b>' + esc(session.user.email) + '</b>, but this account has no admin rights.</p>' +
-        '<p class="muted" style="margin-top:8px">Run the admin grant SQL for your account (see supabase/SETUP.md step 6), then reload.</p>' +
+        '<p class="muted" style="margin-top:8px">In Supabase SQL Editor run:<br><code style="color:var(--gold)">insert into admins (uid) select id from auth.users where email = \'' + esc(session.user.email) + '\';</code><br>then hard-reload. (Profile-based grants fail if you have not signed in inside the game yet — see grant-admin.sql)</p>' +
         '<button class="btn ghost" style="margin-top:14px" onclick="signOut()">Sign out</button></div>'
       : '<button class="btn gold" onclick="signIn()">\ud83d\udd11 Sign in with Google</button>') +
     '</div>';

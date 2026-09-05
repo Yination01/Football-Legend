@@ -33,16 +33,33 @@ Sidebar → **Project Settings → API**. Send me these two values (they are SAF
 
 ⚠️ Do NOT send the `service_role` key. Never share that one with anyone — it bypasses all security. The edge functions access it automatically on the server; we never need it outside Supabase.
 
-## 6. Make yourself admin (after I wire the keys in)
-1. Open the game → Settings → Sign in with Google (use YOUR account).
-2. Then in Supabase: SQL Editor → run:
-   ```sql
-   insert into admins (uid) select uid from profiles where player_id = 'YOUR-PLAYER-ID';
-   ```
-   (replace with your FL-XXXX-XXXX id — visible in game Settings)
-3. That account now has full admin rights in the web dashboard.
+## 6. Make yourself admin (after keys are wired)
+**Important:** signing into the *admin console* alone does **not** create a `profiles` row.
+Profiles appear only after Google sign-in **inside the game** (Settings → Account).
+The old `insert … select from profiles where player_id = …` therefore often inserts
+**zero rows** ("Success. No rows returned") and the console stays locked.
 
-That's it. After step 5, I plug the two values into the game + dashboard and everything lights up.
+**Reliable grant (by Google email — works even with no profile yet):**
+
+1. Supabase → SQL Editor → paste / run (edit the email):
+   ```sql
+   insert into public.admins (uid)
+   select id from auth.users
+   where lower(email) = lower('you@gmail.com')
+   on conflict (uid) do nothing;
+
+   -- confirm:
+   select a.uid, u.email from public.admins a join auth.users u on u.id = a.uid;
+   ```
+   Full diagnostic script: `supabase/grant-admin.sql`.
+
+2. Hard-reload the admin console. You should see Overview, not the lock screen.
+
+3. (Recommended) Also open the game → Settings → Sign in with Google once so your
+   Player ID binds to the same account. Then rankings / gifts / ghosts all attach.
+
+Chicken-and-egg note: RLS on `admins` only lets *existing* admins insert more admins.
+The SQL Editor runs as postgres and **bypasses RLS**, so the first grant must be done here.
 
 ## 7. v1.5 extras (Ghost PvP · Seasons · Owner hardening)
 

@@ -13,10 +13,14 @@
    - Without this: Global Rankings spin forever, Ghost PvP has no opponents, Seasons admin page fails.
 5. **Deploy `verify-owner` edge function** — Edge Functions → Deploy via Editor → name `verify-owner` → paste `game/supabase/functions/verify-owner/index.ts`.
    - Secrets → set `OWNER_KEY_HASH` to the decimal hash of `flown:` + your key (default `1728818593` matches the legacy key if unset).
-6. **Make yourself admin** — sign into the game (web or app) with Google once, then in Supabase SQL Editor:
+6. **Make yourself admin** — Supabase SQL Editor (email grant; profile-based insert often matches 0 rows):
    ```sql
-   insert into admins (uid) select uid from profiles where player_id = 'YOUR-FL-ID';
+   insert into public.admins (uid)
+   select id from auth.users
+   where lower(email) = lower('you@gmail.com')  -- the Google account you use on the admin console
+   on conflict (uid) do nothing;
    ```
+   Full script + diagnostics: `game/supabase/grant-admin.sql`. Then hard-reload the admin console.
 7. **Revoke any old GitHub PAT** that is no longer needed.
 
 ## Building the final APK (versionCode 5 / "1.4" — already set)
