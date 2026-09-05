@@ -183,6 +183,16 @@ var Cloud = (function () {
       .catch(function () { return null; });
   }
 
+  // full news inbox (last 30 announcements, active or recent)
+  function fetchBroadcasts() {
+    if (!enabled()) return Promise.resolve([]);
+    return fetch(FL_CLOUD_URL + "/rest/v1/broadcasts?select=id,message,starts_at,ends_at,created_at&order=created_at.desc&limit=30", {
+      headers: { apikey: FL_CLOUD_ANON, authorization: "Bearer " + FL_CLOUD_ANON },
+    }).then(function (r) { return r.json(); })
+      .then(function (rows) { return Array.isArray(rows) ? rows : []; })
+      .catch(function () { return []; });
+  }
+
   function fetchLeaderboard(mode) { // "bal" | "ml" — public RPC, works signed-out
     if (!enabled()) return Promise.resolve(null);
     return fetch(FL_CLOUD_URL + "/rest/v1/rpc/leaderboard_" + mode, {
@@ -192,11 +202,53 @@ var Cloud = (function () {
     }).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; });
   }
 
+  // Ghost PvP opponents: sanitized public cards from validated ML cloud saves
+  function fetchGhosts() {
+    if (!enabled()) return Promise.resolve(null);
+    return fetch(FL_CLOUD_URL + "/rest/v1/rpc/leaderboard_ghosts", {
+      method: "POST",
+      headers: { apikey: FL_CLOUD_ANON, authorization: "Bearer " + FL_CLOUD_ANON, "content-type": "application/json" },
+      body: JSON.stringify({ lim: 40 }),
+    }).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; });
+  }
+
+  // season boards (monthly snapshots)
+  function fetchSeasonBoard(mode, seasonId) {
+    if (!enabled()) return Promise.resolve(null);
+    return fetch(FL_CLOUD_URL + "/rest/v1/rpc/leaderboard_season", {
+      method: "POST",
+      headers: { apikey: FL_CLOUD_ANON, authorization: "Bearer " + FL_CLOUD_ANON, "content-type": "application/json" },
+      body: JSON.stringify({ mode: mode, season_id: seasonId || null, lim: 50 }),
+    }).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; });
+  }
+
+  function fetchSeasons() {
+    if (!enabled()) return Promise.resolve([]);
+    return fetch(FL_CLOUD_URL + "/rest/v1/seasons?select=id,label,starts_at,ends_at,closed&order=starts_at.desc&limit=24", {
+      headers: { apikey: FL_CLOUD_ANON, authorization: "Bearer " + FL_CLOUD_ANON },
+    }).then(function (r) { return r.json(); })
+      .then(function (rows) { return Array.isArray(rows) ? rows : []; })
+      .catch(function () { return []; });
+  }
+
+  // Owner-key verification is SERVER-SIDE. The hash never ships in the APK.
+  // Requires signed-in Google account. Falls back to null offline.
+  function verifyOwner(key) {
+    if (!signedIn()) return Promise.resolve({ ok: false, msg: "Sign in first (Settings) to unlock owner mode" });
+    return fn("verify-owner", { key: String(key || "") }).then(function (r) {
+      if (r.status === 200 && r.body && r.body.ok) return { ok: true, token: r.body.token || true };
+      return { ok: false, msg: (r.body && r.body.error) || "Wrong key" };
+    }).catch(function () { return { ok: false, msg: "Network error" }; });
+  }
+
   function accountEmail() { return signedIn() ? (session.user.email || "Google account") : null; }
 
   return { init: init, enabled: enabled, signedIn: signedIn, signIn: signIn, signOut: signOut,
            push: push, redeemOnline: redeemOnline, fetchEvents: fetchEvents,
-           fetchBroadcast: fetchBroadcast, fetchLeaderboard: fetchLeaderboard, accountEmail: accountEmail };
+           fetchBroadcast: fetchBroadcast, fetchBroadcasts: fetchBroadcasts,
+           fetchLeaderboard: fetchLeaderboard, fetchGhosts: fetchGhosts,
+           fetchSeasonBoard: fetchSeasonBoard, fetchSeasons: fetchSeasons,
+           verifyOwner: verifyOwner, accountEmail: accountEmail };
 })();
 
 // boot: harmless when unconfigured

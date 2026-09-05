@@ -54,21 +54,29 @@ cd android && ./gradlew assembleDebug
 cd game
 node test-fairness.js   # odds honesty: displayed odds == engine odds
 node test-ml.js         # 350+ Master League checks
+node test-ml-ct.js && node test-bal-ct.js
+node test-v15.js        # Ghost PvP / news / owner / seasons surface
 ```
 
-## Current release — v1.1 (launch candidate)
+## Current release — v1.4 / v1.5 (cloud + ghost)
 
-- `releases/FootballLegend-release.apk` — **release-signed, share this one**
-- `releases/FootballLegend.apk` — debug build (development only)
+Code is complete on `main`. Final signed APK/AAB is built on a machine with JDK 17 (see `scripts/build-release.sh`); until then share the web build:
 
-Includes:
-- 2D live match view in BOTH Become a Legend and Master League — choreographies, replays, attack arrows, DANGEROUS ATTACK warnings, momentum sparkline, danger tint
-- Full synthesized sound (crowd, whistles, goal roars, UI) — zero asset cost
-- First-launch onboarding; on-device error log (Settings → COPY to report bugs)
-- Uninstall-proof saves: Documents backup + Auto Backup + restore prompt + backup codes
+- **Web game:** https://yination01.github.io/Football-Legend/game/
+- **Admin console:** https://yination01.github.io/Football-Legend/game/admin/
+- Prior APKs in `releases/` are v1.2/v1.3-era (still installable for offline play).
+
+### What's new in v1.4–v1.5
+- Cloud saves (Supabase) with anti-cheat validation, Google sign-in, gift inbox, live-ops events, broadcasts
+- Global rankings (Legends + Clubs) + **monthly seasons** with top-3 auto-gifts
+- **Ghost PvP** — async matches vs real players' cloud clubs
+- **News Inbox** — full announcement history
+- Owner panel key verified **server-side** (hash no longer in the APK)
+- Admin console: Overview, Players, Events, Codes, Broadcast, Seasons, Flagged, Admins
 
 Store submission pack lives in `store/` (listing copy, privacy policy, graphics, launch checklist).
+Owner cloud setup: `docs/V14-RELEASE-CHECKLIST.md` + `game/supabase/SETUP.md`.
 
 ## Roadmap
 
-See [docs/ROADMAP.md](docs/ROADMAP.md). Next up: ML 2D match-view parity, ghost PvP, onboarding polish, then Google Play release (.aab + keystore, $25 fee funded from revenue).
+See [docs/ROADMAP.md](docs/ROADMAP.md). Launch track: your Supabase config → final APK → friend playtest → Play Store ($25 from revenue).

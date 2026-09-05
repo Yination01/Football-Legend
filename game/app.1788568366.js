@@ -426,19 +426,10 @@ function bindNav() {
 }
 
 // ---- PES-style skills: hybrid acquisition (2 milestone slots + 3 purchasable) ----
-const BAL_SKILL_POOL = {
-  GK:  ["Track Back", "Captaincy", "Penalty Specialist", "Long Range Drive"],
-  CB:  ["Heading", "Captaincy", "Track Back", "First-time Shot"],
-  LB:  ["Pinpoint Crossing", "Track Back", "One-touch Pass", "Captaincy"],
-  RB:  ["Pinpoint Crossing", "Track Back", "One-touch Pass", "Captaincy"],
-  DMF: ["Through Passing", "Long Range Drive", "Track Back", "Captaincy", "One-touch Pass"],
-  CMF: ["Through Passing", "One-touch Pass", "Long Range Drive", "Captaincy", "Outside Curler"],
-  AMF: ["Through Passing", "Outside Curler", "First-time Shot", "Chip Shot Control", "One-touch Pass", "Penalty Specialist"],
-  LWF: ["Outside Curler", "Pinpoint Crossing", "First-time Shot", "Acrobatic Finishing", "Chip Shot Control"],
-  RWF: ["Outside Curler", "Pinpoint Crossing", "First-time Shot", "Acrobatic Finishing", "Chip Shot Control"],
-  SS:  ["First-time Shot", "Chip Shot Control", "Acrobatic Finishing", "Outside Curler", "Penalty Specialist", "Fighting Spirit"],
-  CF:  ["First-time Shot", "Heading", "Acrobatic Finishing", "Penalty Specialist", "Fighting Spirit", "Chip Shot Control"]
-};
+// Pool is ALWAYS position-gated via Engine.skillsFor — never hand-roll a GK Outside Curler.
+function balSkillPool(pos) {
+  return (E.skillsFor && E.skillsFor(pos || (S && S.pos) || "CF")) || [];
+}
 function balSkillSlots() {
   let slots = 0;
   if (S.career.totalApps >= 20) slots++;
@@ -449,7 +440,12 @@ function balSkillSlots() {
 const BAL_SKILL_SLOT_COST = [{ gp: 5000 }, { gp: 15000 }, { lc: 30 }];
 function skillsScreen() {
   const slots = balSkillSlots();
-  const pool = BAL_SKILL_POOL[S.pos] || BAL_SKILL_POOL.CF;
+  const pool = balSkillPool(S.pos);
+  // Drop any illegal leftovers (e.g. old saves that learned Long Range Drive as GK)
+  if (E.skillsActive) {
+    const cleaned = E.skillsActive(S.skills || [], S.pos);
+    if (cleaned.length !== (S.skills || []).length) { S.skills = cleaned; save(); }
+  }
   const learned = S.skills || [];
   const nextBuy = (S.skillSlotsBought || 0) < 3 ? BAL_SKILL_SLOT_COST[S.skillSlotsBought || 0] : null;
   setTimeout(() => {
@@ -457,6 +453,7 @@ function skillsScreen() {
       const sk = b.dataset.learn;
       if ((S.skills || []).length >= balSkillSlots()) { toast("No free skill slots"); return; }
       if (S.skills.includes(sk)) return;
+      if (E.skillLegal && !E.skillLegal(sk, S.pos)) { toast("\u274c Not available for " + S.pos); return; }
       S.skills.push(sk); save(); toast("\ud83c\udfaf Learned: " + sk); render(skillsScreen);
     });
     const buy = $("#buyslot");
@@ -473,13 +470,15 @@ function skillsScreen() {
   const effects = { "Outside Curler": "FK curler +18%, shots +4%", "Long Range Drive": "shots +6%, FK power +10%",
     "First-time Shot": "shots +8%", "Chip Shot Control": "panenka +25%", "Heading": "shots +5%",
     "Acrobatic Finishing": "shots +7%", "Through Passing": "passes +10%", "Pinpoint Crossing": "FK cross +15%, passes +5%",
-    "One-touch Pass": "passes +8%", "Captaincy": "leadership \u2014 team lift", "Fighting Spirit": "shots & passes +12% when losing after 70'",
-    "Super-sub": "boost when subbed on", "Track Back": "GK saves +2%", "Penalty Specialist": "penalties +12%" };
+    "One-touch Pass": "passes +8%", "Captaincy": "leadership \u2014 team lift", "Fighting Spirit": "+12% when losing after 70'",
+    "Super-sub": "boost when subbed on", "Track Back": "tackle success +4%", "Penalty Specialist": "penalties +12%",
+    "Reflexes": "saves +8%", "Penalty Saver": "penalty saves +18%", "Command of Area": "rush saves +6%, fewer blunders",
+    "High Claim": "stay-big +3%", "GK Long Ball": "distribution +10%" };
   return `<div class="screen">
     <div class="topbar"><div class="logo"><span class="brand1">PLAYER</span> <span class="legend">SKILLS</span></div>
       <div class="wallet"><span class="chip">\ud83d\udfe2 ${S.gp} GP</span><span class="chip gold">\ud83e\ude99 ${S.nl} LC</span></div></div>
-    <div class="panel"><h2>\ud83c\udfaf Skills \u00b7 ${learned.length}/${slots} slots used</h2>
-      <p class="sub">Skills honestly change your decision odds \u2014 boosts are baked into the numbers you see in matches.
+    <div class="panel"><h2>\ud83c\udfaf Skills \u00b7 ${S.pos} \u00b7 ${learned.length}/${slots} slots used</h2>
+      <p class="sub">Only skills legal for <b>${S.pos}</b> appear here (a GK never learns Outside Curler). Boosts are baked into the odds you see in matches.
       Slot 1: 20 career apps ${S.career.totalApps >= 20 ? "\u2705" : "(" + S.career.totalApps + "/20)"} \u00b7 Slot 2: first trophy/award ${((S.flags.cupsWon || 0) > 0 || S.career.seasons.some(x => x.award)) ? "\u2705" : "\u23f3"} \u00b7 3 more purchasable.</p>
       ${nextBuy ? `<button class="btn secondary" id="buyslot">\ud83d\udd13 UNLOCK SLOT \u00b7 ${nextBuy.gp ? nextBuy.gp + " GP" : nextBuy.lc + " LC"}</button>` : ""}
     </div>
@@ -995,8 +994,20 @@ function previewScreen() {
       o.classList.add("sel"); S.role = o.dataset.role; save();
     });
     document.querySelectorAll("[data-pickpos]").forEach(p => p.onclick = () => {
-      S.pos = p.dataset.pickpos; save();
-      render(previewScreen); // re-render: OVR + odds context update
+      S.pos = p.dataset.pickpos;
+      // Keep playstyle legal for the new position (GK styles vs outfield)
+      const styles = E.stylesFor(S.pos) || [];
+      if (styles.length && !styles.some(s => s.id === S.playstyle)) {
+        S.playstyle = styles[0].id;
+        toast("Playstyle set to " + styles[0].label + " (fits " + S.pos + ")");
+      }
+      // Game plan roles are position-gated too
+      const roles = E.rolesFor(S.pos) || {};
+      if (!roles[S.role]) {
+        S.role = Object.keys(roles)[0] || "balanced";
+      }
+      save();
+      render(previewScreen); // re-render: OVR + odds + plan update
     });
     $("#kickoff").onclick = () => { render(() => matchScreen(fx, probs)); };
   }, 0);
@@ -2988,7 +2999,7 @@ function giftsScreen() {
     ${(() => { try {
       const h = JSON.parse(localStorage.getItem("flGiftHistory") || "[]");
       if (!h.length) return "";
-      return `<div class="panel"><h2>\ud83d\udcdc Gift History</h2>${h.slice(0, 12).map(x => {
+      return `<div class="panel"><h2>\ud83d\udcdc Gift History</h2>${h.slice(0, 30).map(x => {
         const parts = [];
         if (x.gp) parts.push("+" + x.gp + " GP"); if (x.lc) parts.push("+" + x.lc + " LC");
         if (x.mlgp) parts.push("+" + x.mlgp + "M ML"); if (x.mllc) parts.push("+" + x.mllc + " ML LC");
@@ -3000,55 +3011,101 @@ function giftsScreen() {
   </div>`;
 }
 // ============================ LEADERBOARDS (cloud) ============================
-var FL_LB_CACHE = { bal: null, ml: null, at: 0 };
+var FL_LB_CACHE = { bal: null, ml: null, at: 0, seasons: null, season: null, seasonRows: null };
 function leaderboardScreen() {
   const mode = window._lbMode || "bal";
+  const seasonId = window._lbSeason || "live"; // "live" | "2026-09" | ...
   const fresh = Date.now() - FL_LB_CACHE.at < 3 * 60 * 1000;
   if (window.Cloud && Cloud.enabled() && !fresh) {
     FL_LB_CACHE.at = Date.now();
-    Promise.all([Cloud.fetchLeaderboard("bal"), Cloud.fetchLeaderboard("ml")]).then(([b, m]) => {
-      FL_LB_CACHE.bal = b; FL_LB_CACHE.ml = m;
+    const jobs = [
+      Cloud.fetchLeaderboard("bal"),
+      Cloud.fetchLeaderboard("ml"),
+      Cloud.fetchSeasons ? Cloud.fetchSeasons() : Promise.resolve([])
+    ];
+    Promise.all(jobs).then(([b, m, seasons]) => {
+      FL_LB_CACHE.bal = b; FL_LB_CACHE.ml = m; FL_LB_CACHE.seasons = seasons || [];
+      if (document.querySelector("#lbback")) render(leaderboardScreen);
+    });
+  }
+  // season board fetch (separate cache key)
+  if (window.Cloud && Cloud.enabled() && seasonId !== "live" &&
+      (FL_LB_CACHE.season !== seasonId + ":" + mode || FL_LB_CACHE.seasonRows == null)) {
+    FL_LB_CACHE.season = seasonId + ":" + mode;
+    FL_LB_CACHE.seasonRows = null;
+    Cloud.fetchSeasonBoard(mode, seasonId).then(res => {
+      FL_LB_CACHE.seasonRows = (res && res.rows) || [];
       if (document.querySelector("#lbback")) render(leaderboardScreen);
     });
   }
   setTimeout(() => {
-    const tb = $("#lbbal"); if (tb) tb.onclick = () => { window._lbMode = "bal"; render(leaderboardScreen); };
-    const tm = $("#lbml"); if (tm) tm.onclick = () => { window._lbMode = "ml"; render(leaderboardScreen); };
+    const tb = $("#lbbal"); if (tb) tb.onclick = () => { window._lbMode = "bal"; FL_LB_CACHE.seasonRows = null; render(leaderboardScreen); };
+    const tm = $("#lbml"); if (tm) tm.onclick = () => { window._lbMode = "ml"; FL_LB_CACHE.seasonRows = null; render(leaderboardScreen); };
+    document.querySelectorAll("[data-lbs]").forEach(o => o.onclick = () => {
+      window._lbSeason = o.dataset.lbs; FL_LB_CACHE.seasonRows = null; FL_LB_CACHE.season = null; render(leaderboardScreen);
+    });
     $("#lbback").onclick = () => render(menuScreen);
   }, 0);
   const myPid = flPlayerId();
-  const rows = FL_LB_CACHE[mode];
-  let body;
+  const seasons = FL_LB_CACHE.seasons || [];
+  let rows, body;
+  if (seasonId === "live") rows = FL_LB_CACHE[mode];
+  else rows = FL_LB_CACHE.seasonRows;
+
   if (!window.Cloud || !Cloud.enabled()) body = '<p class="sub">Leaderboards need the online service \u2014 not configured in this build.</p>';
   else if (rows == null) body = '<p class="sub">\u23f3 Loading global rankings\u2026</p>';
   else if (!rows.length) body = '<p class="sub">No ranked players yet \u2014 sign in and play to claim the #1 spot!</p>';
   else if (mode === "bal") {
-    body = rows.map((r, i) => `<div class="kv" ${r.player_id === myPid ? 'style="color:var(--gold)"' : ""}>
-      <span>${i + 1}. ${r.pname} <span class="sub">(${r.pos})</span>${r.player_id === myPid ? " (YOU)" : ""}<br>
-      <span class="sub">${r.name} \u00b7 S${r.season} \u00b7 age ${r.age} \u00b7 ${r.goals} goals / ${r.apps} apps</span></span>
-      <b>\u2b50 ${r.rep} rep \u00b7 Lv ${r.level}</b></div>`).join("");
+    body = rows.map((r, i) => {
+      const rank = r.rank || (i + 1);
+      const pname = r.pname || (r.detail && r.detail.pname) || r.name;
+      const pos = r.pos || (r.detail && r.detail.pos) || "?";
+      const rep = r.rep != null ? r.rep : (r.detail && r.detail.rep) || 0;
+      const level = r.level != null ? r.level : (r.detail && r.detail.level) || 0;
+      const goals = r.goals != null ? r.goals : (r.detail && r.detail.goals) || 0;
+      const apps = r.apps != null ? r.apps : (r.detail && r.detail.apps) || 0;
+      const season = r.season != null ? r.season : (r.detail && r.detail.season) || "?";
+      return `<div class="kv" ${r.player_id === myPid ? 'style="color:var(--gold)"' : ""}>
+      <span>${rank}. ${pname} <span class="sub">(${pos})</span>${r.player_id === myPid ? " (YOU)" : ""}<br>
+      <span class="sub">${r.name} \u00b7 S${season} \u00b7 ${goals} goals / ${apps} apps</span></span>
+      <b>\u2b50 ${rep} rep \u00b7 Lv ${level}</b></div>`;
+    }).join("");
   } else {
-    body = rows.map((r, i) => `<div class="kv" ${r.player_id === myPid ? 'style="color:var(--gold)"' : ""}>
-      <span>${i + 1}. ${r.club}${r.player_id === myPid ? " (YOU)" : ""}<br>
-      <span class="sub">${r.name} \u00b7 S${r.season} \u00b7 ${r.squad_n} players</span></span>
-      <b>\ud83c\udfc6 ${r.trophies} \u00b7 ${Math.round(r.budget)}M</b></div>`).join("");
+    body = rows.map((r, i) => {
+      const rank = r.rank || (i + 1);
+      const club = r.club || (r.detail && r.detail.club) || "?";
+      const trophies = r.trophies != null ? r.trophies : (r.detail && r.detail.trophies) || 0;
+      const budget = r.budget != null ? r.budget : (r.detail && r.detail.budget) || 0;
+      const squad = r.squad_n != null ? r.squad_n : (r.detail && r.detail.squad_n) || 0;
+      const season = r.season != null ? r.season : (r.detail && r.detail.season) || "?";
+      return `<div class="kv" ${r.player_id === myPid ? 'style="color:var(--gold)"' : ""}>
+      <span>${rank}. ${club}${r.player_id === myPid ? " (YOU)" : ""}<br>
+      <span class="sub">${r.name} \u00b7 S${season} \u00b7 ${squad} players</span></span>
+      <b>\ud83c\udfc6 ${trophies} \u00b7 ${Math.round(budget)}M</b></div>`;
+    }).join("");
   }
+  const seasonChips = [`<div class="opt ${seasonId === "live" ? "sel" : ""}" data-lbs="live" style="flex:0 0 auto;padding:6px 10px;font-size:.7rem">LIVE</div>`]
+    .concat(seasons.slice(0, 6).map(s =>
+      `<div class="opt ${seasonId === s.id ? "sel" : ""}" data-lbs="${s.id}" style="flex:0 0 auto;padding:6px 10px;font-size:.7rem">${s.label || s.id}${s.closed ? "" : " \u00b7 open"}</div>`
+    )).join("");
   return `<div class="screen">
     <div class="topbar"><div class="logo"><span class="brand1">GLOBAL</span> <span class="legend">RANKINGS</span></div></div>
     <div class="viewrow" style="gap:6px;margin-bottom:8px">
       <button class="btn secondary ${mode === "bal" ? "on" : ""}" id="lbbal" style="flex:1">\u2b50 LEGENDS</button>
       <button class="btn secondary ${mode === "ml" ? "on" : ""}" id="lbml" style="flex:1">\ud83c\udfc6 CLUBS</button>
     </div>
+    <div class="optrow" style="flex-wrap:nowrap;overflow-x:auto;margin-bottom:8px">${seasonChips}</div>
     <div class="panel">
-      <h2>${mode === "bal" ? "\u2b50 Top Legends \u00b7 by reputation" : "\ud83c\udfc6 Top Clubs \u00b7 by trophies"}</h2>
+      <h2>${mode === "bal" ? "\u2b50 Top Legends \u00b7 by reputation" : "\ud83c\udfc6 Top Clubs \u00b7 by trophies"}${seasonId !== "live" ? " \u00b7 " + seasonId : ""}</h2>
       ${body}
-      <p class="sub" style="margin-top:8px">Rankings come from cloud saves \u2014 sign in (Settings) and play to appear. Cheated saves never make it here.</p>
+      <p class="sub" style="margin-top:8px">Live boards update from cloud saves. Closed seasons are snapshots \u2014 top 3 earn auto-gifts via inbox. Cheated saves never make it here.</p>
     </div>
     <button class="btn secondary" id="lbback">\u2b05 Main Menu</button>
   </div>`;
 }
 // ============================ OWNER PANEL (superuser) ============================
-const FL_OWNER_HASH = 1728818593; // hashSeed("flown:" + ownerKey) — key never stored in code
+// Owner key is verified SERVER-SIDE (edge fn verify-owner). No hash ships in the APK.
+// Offline/dev fallback: only accounts that already had ownerMode=true keep it locally.
 function flIsOwner() { return getSet().ownerMode === true; }
 function ownerScreen() {
   if (!flIsOwner()) { render(menuScreen); return ""; }
@@ -3168,6 +3225,16 @@ if (S) {
   S.upgrades = S.upgrades || { fitness: 0, medical: 0, agentNet: 0 };
   S.skills = S.skills || []; S.skillSlotsBought = S.skillSlotsBought || 0;
   if (S.loginStreak === undefined) { S.lastLogin = null; S.loginStreak = 0; }
+  // Strip skills illegal for current position (e.g. old GK saves with Outside Curler)
+  if (E.skillsActive) {
+    const cleaned = E.skillsActive(S.skills, S.pos);
+    if (cleaned.length !== S.skills.length) { S.skills = cleaned; try { save(); } catch (e) {} }
+  }
+  // Ensure playstyle still legal for pos
+  if (E.stylesFor) {
+    const st = E.stylesFor(S.pos) || [];
+    if (st.length && !st.some(x => x.id === S.playstyle)) { S.playstyle = st[0].id; try { save(); } catch (e) {} }
+  }
 }
 // migration: older saves used positions/fields that no longer exist
 if (S && (!E.POSITIONS[S.pos] || !S.playstyle)) { S = null; localStorage.removeItem(SAVE_KEY); }
@@ -3195,13 +3262,84 @@ if (window.Capacitor) {
 
 // ============================ MAIN MENU ============================
 var FL_BROADCAST = null, FL_BROADCAST_AT = 0;
+var FL_NEWS_CACHE = null, FL_NEWS_AT = 0;
+function flNewsRead() { try { return JSON.parse(localStorage.getItem("flNewsRead") || "[]"); } catch (e) { return []; } }
+function flNewsMark(id) {
+  try {
+    const s = new Set(flNewsRead()); s.add(String(id));
+    const v = JSON.stringify([...s].slice(-80));
+    localStorage.setItem("flNewsRead", v); if (window.flMirror) flMirror("flNewsRead", v);
+  } catch (e) {}
+}
+function flNewsUnread() {
+  if (!FL_NEWS_CACHE || !FL_NEWS_CACHE.length) return 0;
+  const read = new Set(flNewsRead());
+  return FL_NEWS_CACHE.filter(n => n && n.id && !read.has(String(n.id))).length;
+}
+function newsInboxScreen() {
+  if (window.Cloud && Cloud.enabled() && Date.now() - FL_NEWS_AT > 3 * 60 * 1000) {
+    FL_NEWS_AT = Date.now();
+    Cloud.fetchBroadcasts().then(rows => {
+      FL_NEWS_CACHE = rows || [];
+      // keep banner in sync with newest live message
+      const today = new Date().toISOString().slice(0, 10);
+      const live = (FL_NEWS_CACHE || []).find(n => n.starts_at <= today && n.ends_at >= today);
+      if (live) FL_BROADCAST = live.message;
+      if (document.querySelector("#newsback")) render(newsInboxScreen);
+    }).catch(() => {});
+  }
+  setTimeout(() => {
+    document.querySelectorAll("[data-news]").forEach(el => el.onclick = () => {
+      flNewsMark(el.dataset.news);
+      el.style.opacity = "0.7";
+    });
+    const mark = $("#newsmark"); if (mark) mark.onclick = () => {
+      (FL_NEWS_CACHE || []).forEach(n => flNewsMark(n.id));
+      toast("\u2705 All marked read"); render(newsInboxScreen);
+    };
+    $("#newsback").onclick = () => render(menuScreen);
+  }, 0);
+  const rows = FL_NEWS_CACHE;
+  let body;
+  if (!window.Cloud || !Cloud.enabled()) body = '<p class="sub">News inbox needs the online service.</p>';
+  else if (rows == null) body = '<p class="sub">\u23f3 Loading announcements\u2026</p>';
+  else if (!rows.length) body = '<p class="sub">No announcements yet. When the admin publishes a broadcast, it lands here.</p>';
+  else {
+    const read = new Set(flNewsRead());
+    const today = new Date().toISOString().slice(0, 10);
+    body = rows.map(n => {
+      const live = n.starts_at <= today && n.ends_at >= today;
+      const isNew = n.id && !read.has(String(n.id));
+      return `<div class="panel" data-news="${n.id || ""}" style="cursor:pointer${isNew ? ";border-color:var(--gold)" : ""}">
+        <div class="kv"><span>${live ? "\ud83d\udce2 LIVE" : "\ud83d\udccb"} ${isNew ? '<b style="color:var(--gold)">NEW</b> ' : ""}
+        <span class="sub">${n.created_at ? new Date(n.created_at).toLocaleDateString() : (n.starts_at || "")}${n.ends_at ? " \u2192 " + n.ends_at : ""}</span></span></div>
+        <p style="margin:4px 0 0;line-height:1.45">${String(n.message || "").replace(/</g, "&lt;")}</p>
+      </div>`;
+    }).join("");
+  }
+  return `<div class="screen">
+    <div class="topbar"><div class="logo"><span class="brand1">NEWS</span> <span class="legend">INBOX</span></div></div>
+    <div class="panel"><h2>\ud83d\udce2 Announcements</h2>
+      <p class="sub">Every admin broadcast, newest first. Tap to mark read.</p></div>
+    ${body}
+    <div class="optrow">
+      <button class="btn secondary" id="newsmark" style="flex:1">Mark all read</button>
+      <button class="btn secondary" id="newsback" style="flex:1">\u2b05 Main Menu</button>
+    </div>
+  </div>`;
+}
 function menuScreen() {
-  // pull admin broadcast (cached 10 min); re-render banner when it first arrives
+  // pull admin broadcast + news list (cached 10 min); re-render banner when it first arrives
   if (window.Cloud && Cloud.enabled() && Date.now() - FL_BROADCAST_AT > 10 * 60 * 1000) {
     FL_BROADCAST_AT = Date.now();
     Cloud.fetchBroadcast().then(msg => {
       if (msg && msg !== FL_BROADCAST) { FL_BROADCAST = msg; if (document.querySelector("#gobal")) render(menuScreen); }
     }).catch(() => {});
+    if (Cloud.fetchBroadcasts) {
+      Cloud.fetchBroadcasts().then(rows => { FL_NEWS_CACHE = rows || []; FL_NEWS_AT = Date.now();
+        if (document.querySelector("#gobal") && flNewsUnread()) render(menuScreen);
+      }).catch(() => {});
+    }
   }
   let mlInfo = null;
   try { const m = JSON.parse(localStorage.getItem("footballLegendML_v1")); if (m && !m.sacked) mlInfo = m; } catch (e) {}
@@ -3229,9 +3367,12 @@ function menuScreen() {
     $("#gohow").onclick = () => render(howScreen);
     const gg = $("#gogifts"); if (gg) gg.onclick = () => render(giftsScreen);
     const gl = $("#golb"); if (gl) gl.onclick = () => render(leaderboardScreen);
+    const gn = $("#gonews"); if (gn) gn.onclick = () => render(newsInboxScreen);
+    const gh = $("#goghost"); if (gh) gh.onclick = () => render(ghostScreen);
     const go2 = $("#goowner"); if (go2) go2.onclick = () => render(ownerScreen);
   }, 0);
   const liveGifts = flGiftsLive().length;
+  const newsN = flNewsUnread();
   return `<div class="screen">
     <div class="topbar"><div class="logo"><span class="brand1">FOOTBALL</span> <span class="legend">LEGEND</span></div></div>
     ${FL_BROADCAST ? `<div class="panel" style="border:1px solid #e8c35a;background:#1c180c"><b style="color:#e8c35a">\ud83d\udce2 ANNOUNCEMENT</b><p class="sub" style="margin-top:4px">${FL_BROADCAST.replace(/</g, "&lt;")}</p></div>` : ""}
@@ -3252,6 +3393,14 @@ function menuScreen() {
       <h2>\ud83c\udfae Friend Match (Challenge Codes)</h2>
       <p class="sub">Set up a match, send the code. Your friend plays the identical honest match on their own phone \u2014 then sends the result code back so you can watch it too.</p>
     </div>
+    <div class="panel" style="cursor:pointer" id="goghost">
+      <h2>\ud83d\udc7b Ghost PvP</h2>
+      <p class="sub">Challenge real players' cloud clubs \u2014 async, AI-controlled, same honest engine. No matchmaking server needed.</p>
+    </div>
+    <div class="panel" style="cursor:pointer${newsN ? ";border-color:var(--gold)" : ""}" id="gonews">
+      <h2>\ud83d\udce2 News Inbox${newsN ? ` <span class="badge gold" style="float:right">${newsN} NEW</span>` : ""}</h2>
+      <p class="sub">Every announcement from the admin console \u2014 history, not just the banner.</p>
+    </div>
     <div class="panel" style="cursor:pointer${liveGifts ? ";border-color:var(--gold)" : ""}" id="gogifts">
       <h2>\ud83c\udf81 Gifts & Events${liveGifts ? ` <span class="badge gold" style="float:right">${liveGifts} LIVE</span>` : ""}</h2>
       <p class="sub">Free players, GP and Legend Coins \u2014 event drops and redeem codes. Everything a gift, nothing pay-to-win.</p>
@@ -3271,19 +3420,6 @@ function menuScreen() {
   </div>`;
 }
 
-// ============================ FRIENDLY MATCH ============================
-function friendlyPool() {
-  const pool = [];
-  if (S) for (const c of S.world.clubs) pool.push(Object.assign({}, c, { tag: "Your league" }));
-  else {
-    const rng = E.mulberry32(E.hashSeed("frpool"));
-    for (const c of E.genStarterClubs("britain", rng)) pool.push(Object.assign({}, c, { tag: "National" }));
-  }
-  for (const c of E.EURO_CLUBS) pool.push(Object.assign({}, c, { tag: "Continental elite" }));
-  return pool;
-}
-function frEnc(o) { return btoa(unescape(encodeURIComponent(JSON.stringify(o)))).replace(/=+$/, ""); }
-function frDec(c) { try { return JSON.parse(decodeURIComponent(escape(atob((c || "").trim())))); } catch (e) { return null; } }
 const FR_MENTS = { defensive: ["\ud83d\udee1 Defensive", -1.5], balanced: ["\u2696 Balanced", 0], attacking: ["\u2694 Attacking", 2] };
 const FR_STYLES = {
   possession: { label: "\ud83d\udd35 Possession", beats: "longball" },
@@ -3298,6 +3434,123 @@ function frDuel(hstl, astl) {
   return { h: 0, a: 0, txt: " Styles neutral \u2014 no bonus." };
 }
 
+// ============================ GHOST PvP (async vs cloud clubs) ============================
+// Challenge real players' validated ML cloud teams. Opponent is AI-controlled with their
+// sealed mentality/style/formation-derived strength. Same honest engine as Friend Match.
+var FL_GHOST_CACHE = null, FL_GHOST_AT = 0;
+function ghostMyClub() {
+  // Prefer the player's own ML club; else BaL club; else a national starter.
+  try {
+    const m = JSON.parse(localStorage.getItem("footballLegendML_v1") || "null");
+    if (m && m.squad && m.squad.length >= 11) {
+      // compute local strength the same way the cloud RPC does (avg OVR of XI)
+      const xi = Array.isArray(m.xi) && m.xi.length ? m.xi : null;
+      const pool = xi ? m.squad.filter(p => xi.includes(p.id)) : m.squad;
+      const avg = pool.reduce((s, p) => s + (p.ovr || 60), 0) / Math.max(1, pool.length);
+      const ment = m.mentality || "balanced";
+      const mentB = (FR_MENTS[ment] || FR_MENTS.balanced)[1];
+      return {
+        name: m.clubName || (m.world && m.world.clubs[m.clubIdx] && m.world.clubs[m.clubIdx].name) || "My Club",
+        short: m.clubShort || "YOU",
+        str: Math.min(92, Math.max(45, Math.round(avg * 10) / 10)) + mentB,
+        mentality: ment,
+        style: m.style || "possession",
+        col1: "#e8c15a", col2: "#131a14",
+        source: "ml"
+      };
+    }
+  } catch (e) {}
+  if (S && S.world && S.world.clubs && S.clubIdx != null) {
+    const c = S.world.clubs[S.clubIdx];
+    return { name: c.name, short: c.short, str: c.str, mentality: "balanced", style: "possession",
+             col1: c.col1 || "#2b7a4b", col2: c.col2 || "#fff", source: "bal" };
+  }
+  const c = E.STARTER_CLUBS[0];
+  return { name: c.name, short: c.short, str: c.str, mentality: "balanced", style: "possession",
+           col1: c.col1 || "#2b7a4b", col2: c.col2 || "#fff", source: "starter" };
+}
+function ghostScreen() {
+  if (window.Cloud && Cloud.enabled() && (!FL_GHOST_CACHE || Date.now() - FL_GHOST_AT > 3 * 60 * 1000)) {
+    FL_GHOST_AT = Date.now();
+    Cloud.fetchGhosts().then(rows => {
+      FL_GHOST_CACHE = rows;
+      if (document.querySelector("#ghback")) render(ghostScreen);
+    });
+  }
+  const me = ghostMyClub();
+  setTimeout(() => {
+    document.querySelectorAll("[data-gh]").forEach(b => b.onclick = () => {
+      const g = (FL_GHOST_CACHE || [])[+b.dataset.gh];
+      if (!g) return;
+      startGhostMatch(me, g);
+    });
+    $("#ghback").onclick = () => render(menuScreen);
+    const rf = $("#ghref"); if (rf) rf.onclick = () => { FL_GHOST_AT = 0; FL_GHOST_CACHE = null; render(ghostScreen); };
+  }, 0);
+  let body;
+  if (!window.Cloud || !Cloud.enabled()) body = '<p class="sub">Ghost PvP needs the online service.</p>';
+  else if (FL_GHOST_CACHE == null) body = '<p class="sub">\u23f3 Scouting cloud clubs\u2026</p>';
+  else if (!FL_GHOST_CACHE.length) body = '<p class="sub">No cloud clubs yet \u2014 opponents appear once signed-in managers sync a Master League save.</p>';
+  else {
+    const myPid = flPlayerId();
+    body = FL_GHOST_CACHE.filter(g => g.player_id !== myPid).map((g, i) => {
+      // re-index against full cache for data-gh
+      const idx = FL_GHOST_CACHE.indexOf(g);
+      const ment = FR_MENTS[g.mentality] || FR_MENTS.balanced;
+      const st = FR_STYLES[g.style];
+      return `<div class="kv">
+        <span><b>${g.club}</b> <span class="sub">· ${g.name}</span><br>
+        <span class="sub">str ${g.str} · ${ment[0]} · ${st ? st.label : g.style} · S${g.season} · \ud83c\udfc6${g.trophies}</span></span>
+        <button class="btn" data-gh="${idx}" style="width:auto;padding:8px 14px">PLAY</button>
+      </div>`;
+    }).join("") || '<p class="sub">Only your own club is online \u2014 wait for other managers to sync.</p>';
+  }
+  return `<div class="screen">
+    <div class="topbar"><div class="logo"><span class="brand1">GHOST</span> <span class="legend">PvP</span></div></div>
+    <div class="panel"><h2>\ud83d\udc7b Async vs real clubs</h2>
+      <p class="sub">You play as <b>${me.name}</b> (str ${me.str}${me.source === "ml" ? " · your ML club" : me.source === "bal" ? " · your BaL club" : ""}).
+      Opponents are AI-run with their cloud tactics sealed. Odds = engine truth.</p>
+      <p class="sub">Tip: open Master League and play a matchday while signed in so YOUR club appears for others.</p>
+    </div>
+    <div class="panel"><h2>\ud83c\udf10 Cloud opponents</h2>${body}</div>
+    <div class="optrow">
+      <button class="btn secondary" id="ghref" style="flex:1">\ud83d\udd04 Refresh</button>
+      <button class="btn secondary" id="ghback" style="flex:1">\u2b05 Main Menu</button>
+    </div>
+  </div>`;
+}
+function startGhostMatch(me, g) {
+  const mentB = (FR_MENTS[g.mentality] || FR_MENTS.balanced)[1];
+  const duel = frDuel(me.style, g.style);
+  // Ghost is always away; you are home (home lift is honest and visible in odds)
+  const Hc = { name: me.name, short: me.short, str: me.str + duel.h, col1: me.col1 || "#e8c15a", col2: me.col2 || "#131a14" };
+  const Ac = { name: g.club, short: (g.club || "GHOST").slice(0, 3).toUpperCase(),
+               str: Number(g.str) + mentB + duel.a, col1: "#5a3a7a", col2: "#fff" };
+  const seed = E.hashSeed(["ghost", me.name, me.str, g.player_id, g.club, g.str, g.mentality, g.style, Math.floor(Date.now() / 60000)].join("~"));
+  const probs = E.winProbs(Hc, Ac, 600);
+  const R = { v: 4, hn: Hc.name, hshort: Hc.short, hs: Hc.str, hm: me.mentality || "balanced", hstl: me.style,
+              an: Ac.name, ashort: Ac.short, as: Ac.str, am: g.mentality, astl: g.style,
+              hf: 0, af: 0, hh: true, sb: 5, x: seed,
+              ghost: true, gpid: g.player_id, gname: g.name };
+  render(() => friendlyMatch(Hc, Ac, probs, {
+    seed, R, mode: "ghost",
+    duelTxt: (duel.txt || "") + " · Ghost of " + g.name + " (AI)"
+  }));
+}
+
+// ============================ FRIENDLY MATCH ============================
+function friendlyPool() {
+  const pool = [];
+  if (S) for (const c of S.world.clubs) pool.push(Object.assign({}, c, { tag: "Your league" }));
+  else {
+    const rng = E.mulberry32(E.hashSeed("frpool"));
+    for (const c of E.genStarterClubs("britain", rng)) pool.push(Object.assign({}, c, { tag: "National" }));
+  }
+  for (const c of E.EURO_CLUBS) pool.push(Object.assign({}, c, { tag: "Continental elite" }));
+  return pool;
+}
+function frEnc(o) { return btoa(unescape(encodeURIComponent(JSON.stringify(o)))).replace(/=+$/, ""); }
+function frDec(c) { try { return JSON.parse(decodeURIComponent(escape(atob((c || "").trim())))); } catch (e) { return null; } }
 function friendlyScreen() {
   const pool = friendlyPool();
   let tab = "create", myClubI = -1, myMent = "balanced", myStyl = "possession", ch = null, code = "";
@@ -3454,13 +3707,15 @@ function friendlyMatch(Hc, Ac, probs, ctx) {
       Snd.fulltime();
       const winner = r.gH > r.gA ? "\ud83c\udfc6 " + Hc.name + " WINS!" : r.gA > r.gH ? "\ud83c\udfc6 " + Ac.name + " WINS!" : "\ud83e\udd1d DRAW";
       const resCode = ctx.mode === "accept" ? frEnc(ctx.R) : "";
+      const isGhost = ctx.mode === "ghost";
       decEl.style.display = "block";
       decEl.innerHTML = `<div class="scenline">\ud83c\udfc1 ${winner}</div>
-        <p class="sub" style="margin:4px 0"><b>${Hc.short} ${r.gH} - ${r.gA} ${Ac.short}</b> \u00b7 odds were ${probs.home}%/${probs.draw}%/${probs.away}% \u2014 honest engine, both phones see the identical match.</p>
+        <p class="sub" style="margin:4px 0"><b>${Hc.short} ${r.gH} - ${r.gA} ${Ac.short}</b> \u00b7 odds were ${probs.home}%/${probs.draw}%/${probs.away}% \u2014 honest engine${isGhost ? " \u00b7 Ghost PvP (AI ran their tactics)" : ", both phones see the identical match"}.</p>
+        ${ctx.duelTxt ? `<p class="sub">${ctx.duelTxt}</p>` : ""}
         ${resCode ? `<p class="sub">\ud83d\udce4 Send this RESULT CODE back so they can watch:</p><textarea readonly style="width:100%;height:64px" onclick="this.select()">${resCode}</textarea>` : ""}
-        <button class="btn" id="fragain">\u2b05 FRIEND MATCH HUB</button>
+        <button class="btn" id="fragain">${isGhost ? "\u2b05 GHOST PvP" : "\u2b05 FRIEND MATCH HUB"}</button>
         <button class="btn secondary" id="frmenu">MAIN MENU</button>`;
-      $("#fragain").onclick = () => render(friendlyScreen);
+      $("#fragain").onclick = () => render(isGhost ? ghostScreen : friendlyScreen);
       $("#frmenu").onclick = () => render(menuScreen);
     }
     function step() {
@@ -3702,9 +3957,16 @@ function settingsScreen() {
       if (idTaps >= 7) {
         idTaps = 0;
         const key = prompt("Owner key:");
-        if (key && E.hashSeed("flown:" + key.trim()) === FL_OWNER_HASH) {
-          setSet("ownerMode", true); toast("\ud83d\udc51 Owner mode ON"); render(menuScreen);
-        } else if (key !== null) toast("\u274c Wrong key");
+        if (key === null) return;
+        if (window.Cloud && Cloud.enabled() && Cloud.signedIn() && Cloud.verifyOwner) {
+          toast("Verifying\u2026");
+          Cloud.verifyOwner(key.trim()).then(r => {
+            if (r && r.ok) { setSet("ownerMode", true); toast("\ud83d\udc51 Owner mode ON"); render(menuScreen); }
+            else toast("\u274c " + ((r && r.msg) || "Wrong key"));
+          });
+        } else {
+          toast("\u274c Sign in with Google first \u2014 owner unlock is server-verified");
+        }
       }
     };
     const rb = $("#rstbal"); if (rb) rb.onclick = () => { if (confirm("Delete Become a Legend career? (ML untouched)")) { localStorage.removeItem(SAVE_KEY); S = null; flMirror(SAVE_KEY, null); flFileBackupSoon(); toast("BaL career deleted"); render(settingsScreen); } };

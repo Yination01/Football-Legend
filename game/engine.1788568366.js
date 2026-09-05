@@ -261,7 +261,8 @@ function createMatch(home, away, opts) {
   const role = ROLES[o.role || "balanced"] || ROLES.balanced;
   const P = o.player || null;
   const ps = P ? (PLAYSTYLES[P.playstyle] || null) : null;
-  const pskills = P ? (P.skills || []) : [];
+  // Only skills legal for the match position apply (GK never gets Outside Curler bonus etc.)
+  const pskills = P ? skillsActive(P.skills, P.pos) : [];
   const skM = (k) => skillMul(pskills, k, { losing70: st && st.min >= 70 && (pTeam === 0 ? st.gH < st.gA : st.gA < st.gH) });
   const pTeam = o.playerTeam; // 0 home, 1 away, null
   const posInfo = P ? POSITIONS[P.pos] : null;
@@ -355,11 +356,13 @@ function createMatch(home, away, opts) {
     if (choice === "auto") choice = rng() < (ps && ps.rush ? ps.rush * 0.4 : 0.35) ? "rush" : "stay";
     const gs = ctx.scen || { stayAdj: 0, rushAdj: 0, blunder: 0.12 };
     const base = 0.28 + Math.pow(eS("DEF") / 100, 1.5) * 0.62; // elite keepers save like elite keepers (85-cap like FK)
-    const tb = pskills.includes("Track Back") ? 0.02 : 0;
+    const gkSaveM = skM("gkSave");
+    const claim = pskills.includes("High Claim") ? 0.03 : 0;
     let saveP = choice === "stay"
-      ? Math.max(0.10, Math.min(0.85, base + gs.stayAdj + (role.gkStay || 0) + tb))
-      : Math.max(0.10, Math.min(0.85, base + 0.06 + gs.rushAdj + (role.gkRush || 0) + tb));
-    const blunder = choice === "rush" && rng() < Math.min(0.5, gs.blunder * (role.gkBlunderMul || 1));
+      ? Math.max(0.10, Math.min(0.85, (base + gs.stayAdj + (role.gkStay || 0) + claim) * gkSaveM))
+      : Math.max(0.10, Math.min(0.85, (base + 0.06 + gs.rushAdj + (role.gkRush || 0)) * gkSaveM * skM("gkRush")));
+    const blMul = skM("gkBlunder"); // <1 = fewer blunders (Command of Area)
+    const blunder = choice === "rush" && rng() < Math.min(0.5, gs.blunder * (role.gkBlunderMul || 1) * blMul);
     const scoredInitially = rng() < ctx.conv;
     let conceded;
     if (blunder) { conceded = true; st.rating -= 1.1; }
@@ -412,10 +415,11 @@ function createMatch(home, away, opts) {
     const out = [];
     if (choice === "auto") choice = pick(rng, ["left", "right", "stay"]);
     const shooterDir = pick(rng, ["left", "right", "middle"]);
-    let saveP = 0.06; // wrong guess
+    const penM = skM("gkPen");
+    let saveP = 0.06 * Math.min(1.2, penM); // wrong guess still low
     if ((choice === "left" && shooterDir === "left") || (choice === "right" && shooterDir === "right"))
-      saveP = 0.34 + eS("DEF") * 0.004;
-    if (choice === "stay" && shooterDir === "middle") saveP = 0.72;
+      saveP = (0.34 + eS("DEF") * 0.004) * penM;
+    if (choice === "stay" && shooterDir === "middle") saveP = 0.72 * penM;
     const saved = rng() < saveP;
     if (saved) {
       st.pSaves++; st.rating += 1.2;
@@ -497,7 +501,8 @@ function createMatch(home, away, opts) {
       // defensive involvement: tackles for def-biased positions (auto, honest DEF roll)
       if (playerDefending && !posInfo.gk && posInfo.defBias > 0 && rng() < 0.30 * posInfo.defBias * (ps ? ps.def : 1) * (role.tackleFreq || 1)) {
         st.pTackles = st.pTackles || 0;
-        if (rng() < 0.35 + (P.eff.DEF / 100) * 0.45 + (role.tackleAdj || 0)) {
+        const tbBump = pskills.includes("Track Back") ? 0.04 : 0;
+        if (rng() < 0.35 + (P.eff.DEF / 100) * 0.45 + (role.tackleAdj || 0) + tbBump) {
           st.pTackles++; st.rating += 0.22;
           out.push(ev("tackle", isHome, { by: "you" }));
           return finishStep(out); // chance snuffed out
@@ -580,8 +585,10 @@ function createMatch(home, away, opts) {
 }
 
 // Honest decision odds — EXACT mirrors of resolveChance/resolveGK math.
-// PES-style player skills — multipliers applied IDENTICALLY in decisionOdds and resolve math.
+// PES/eFootball-style player skills — multipliers applied IDENTICALLY in decisionOdds and resolve math.
+// Every skill is position-gated via SKILL_POS / skillsFor(pos). GKs never roll Outside Curler etc.
 const SKILLS = {
+  // ---- outfield finishing / set pieces ----
   "Outside Curler":      { fkCurler: 1.18, shoot: 1.04 },
   "Long Range Drive":    { shoot: 1.06, fkPower: 1.10 },
   "First-time Shot":     { shoot: 1.08 },
@@ -592,17 +599,56 @@ const SKILLS = {
   "Pinpoint Crossing":   { fkCross: 1.15, pass: 1.05 },
   "One-touch Pass":      { pass: 1.08 },
   "Captaincy":           {}, // team-wide: handled at team-strength level
-  "Fighting Spirit":     { losing70: 1.12 }, // shoot+pass when losing after 70'
+  "Fighting Spirit":     { losing70: 1.12 }, // shoot+pass (outfield) or saves (GK) when losing after 70'
   "Super-sub":           {}, // handled by UI (sub context)
-  "Track Back":          { gkStay: 0.02 }, // small defensive bump (outfield: reserved)
-  "Penalty Specialist":  { penalty: 1.12 }
+  "Track Back":          { defBump: 0.02 }, // outfield DEF involvement bump
+  "Penalty Specialist":  { penalty: 1.12 },
+  // ---- goalkeeper-only ----
+  "Reflexes":            { gkSave: 1.08 },            // stay & rush save rate
+  "Penalty Saver":       { gkPen: 1.18 },             // facing penalties
+  "Command of Area":     { gkRush: 1.06, gkBlunder: 0.82 }, // better rush, fewer blunders
+  "High Claim":          { gkStay: 0.03 },            // stay-big bonus (crosses/claims)
+  "GK Long Ball":        { gkDist: 1.10 }             // reserved for distribution moments
 };
+// Legal positions per skill. Keep in lockstep with BaL UI + ML pack rolls.
+const SKILL_POS = {
+  "Outside Curler":      ["CMF","AMF","LWF","RWF","SS"],
+  "Long Range Drive":    ["DMF","CMF","AMF","LWF","RWF","SS","CF"],
+  "First-time Shot":     ["CB","AMF","LWF","RWF","SS","CF"],
+  "Chip Shot Control":   ["AMF","LWF","RWF","SS","CF"],
+  "Heading":             ["CB","CF","SS"],
+  "Acrobatic Finishing": ["LWF","RWF","SS","CF"],
+  "Through Passing":     ["DMF","CMF","AMF","LB","RB"],
+  "Pinpoint Crossing":   ["LB","RB","LWF","RWF"],
+  "One-touch Pass":      ["LB","RB","DMF","CMF","AMF"],
+  "Captaincy":           ["GK","CB","LB","RB","DMF","CMF","AMF","LWF","RWF","SS","CF"],
+  "Fighting Spirit":     ["GK","CB","DMF","CMF","SS","CF"],
+  "Super-sub":           ["CB","LB","RB","DMF","CMF","AMF","LWF","RWF","SS","CF"],
+  "Track Back":          ["CB","LB","RB","DMF","CMF","LWF","RWF"],
+  "Penalty Specialist":  ["AMF","SS","CF","LWF","RWF"],
+  "Reflexes":            ["GK"],
+  "Penalty Saver":       ["GK"],
+  "Command of Area":     ["GK"],
+  "High Claim":          ["GK"],
+  "GK Long Ball":        ["GK"]
+};
+function skillsFor(pos) {
+  const p = pos || "CF";
+  return Object.keys(SKILL_POS).filter(s => (SKILL_POS[s] || []).includes(p));
+}
+function skillLegal(skill, pos) {
+  return !!(SKILL_POS[skill] && SKILL_POS[skill].includes(pos));
+}
+// Filter a skill list down to those legal for pos (match-time + migration).
+function skillsActive(skills, pos) {
+  return (skills || []).filter(s => skillLegal(s, pos));
+}
 function skillMul(skills, key, ctx2) {
   let m = 1;
   for (const s of skills || []) {
     const def = SKILLS[s]; if (!def) continue;
     if (def[key]) m *= def[key];
-    if (key === "shoot" || key === "pass") {
+    if (key === "shoot" || key === "pass" || key === "gkSave") {
       if (def.losing70 && ctx2 && ctx2.losing70) m *= def.losing70;
     }
   }
@@ -610,7 +656,8 @@ function skillMul(skills, key, ctx2) {
 }
 function decisionOdds(dec, player, roleId) {
   const P = player, ps = PLAYSTYLES[P.playstyle] || null;
-  const sk = (k) => skillMul(P.skills, k, dec.skctx);
+  const activeSk = skillsActive(P.skills, P.pos);
+  const sk = (k) => skillMul(activeSk, k, dec.skctx);
   const clamp = (c) => Math.max(0.05, Math.min(0.62, c));
   const fat = 0.75 + 0.25 * ((dec.stam != null ? dec.stam : 100) / 100);
   const eS = (k) => P.eff[k] * fat;
@@ -622,17 +669,23 @@ function decisionOdds(dec, player, roleId) {
     curler: Math.round(Math.min(94, (0.05 + Math.pow(eS("SHO") / 100, 2) * 0.82) * sk("fkCurler") * 100)),
     power: Math.round(Math.min(94, (0.05 + Math.pow((eS("SHO") * 0.6 + eS("PHY") * 0.4) / 100, 2) * 0.75) * sk("fkPower") * 100)),
     cross: Math.round(Math.min(94, (0.06 + Math.pow(eS("PAS") / 100, 2) * 0.72) * sk("fkCross") * 100)) };
-  if (dec.type === "gkpen") return { type: "gkpen", stam: Math.round(dec.stam || 100),
-    dive: Math.round((0.34 + eS("DEF") * 0.004) * 33 + 6),  // expected over shooter dirs
-    stay: Math.round(0.72 * 33 + 4) };
+  if (dec.type === "gkpen") {
+    const gsk = (k) => skillMul(skillsActive(P.skills, P.pos || "GK"), k, dec.skctx);
+    const penM = gsk("gkPen");
+    return { type: "gkpen", stam: Math.round(dec.stam || 100),
+      dive: Math.round((0.34 + eS("DEF") * 0.004) * penM * 33 + 6),
+      stay: Math.round(0.72 * penM * 33 + 4) };
+  }
   if (dec.type === "gk") {
     const role = ROLES[roleId] || ROLES.balanced;
     const gs = dec.scen || { stayAdj: 0, rushAdj: 0, blunder: 0.12 };
     const base = 0.28 + Math.pow(eS("DEF") / 100, 1.5) * 0.62;
-    const tb = (P.skills || []).includes("Track Back") ? 0.02 : 0;
-    const spStay = Math.max(0.10, Math.min(0.85, base + gs.stayAdj + (role.gkStay || 0) + tb));
-    const spRush = Math.max(0.10, Math.min(0.85, base + 0.06 + gs.rushAdj + (role.gkRush || 0) + tb));
-    const bl = Math.min(0.5, gs.blunder * (role.gkBlunderMul || 1));
+    // Position-filter first so a mis-assigned outfield skill never leaks into GK odds
+    const gsk = (k) => skillMul(skillsActive(P.skills, P.pos || "GK"), k, dec.skctx);
+    const claim = skillsActive(P.skills, P.pos || "GK").includes("High Claim") ? 0.03 : 0;
+    const spStay = Math.max(0.10, Math.min(0.85, (base + gs.stayAdj + (role.gkStay || 0) + claim) * gsk("gkSave")));
+    const spRush = Math.max(0.10, Math.min(0.85, (base + 0.06 + gs.rushAdj + (role.gkRush || 0)) * gsk("gkSave") * gsk("gkRush")));
+    const bl = Math.min(0.5, gs.blunder * (role.gkBlunderMul || 1) * gsk("gkBlunder"));
     const stayConcede = dec.conv * (1 - 0.85 * spStay);
     const rushConcede = bl + (1 - bl) * dec.conv * (1 - 0.85 * spRush);
     return { type: "gk", xg: Math.round(dec.conv * 100),
@@ -874,7 +927,7 @@ const Engine = {
   POSITIONS, PLAYSTYLES, stylesFor, ROLES, rolesFor, baseStats, calcOVR,
   createMatch, simulateMatch, winProbs, makeWorld, computeTable, decisionOdds,
   REGION_LEAGUES, genStarterClubs,
-  STARTER_CLUBS, EURO_CLUBS, SKILLS, skillMul,
+  STARTER_CLUBS, EURO_CLUBS, SKILLS, SKILL_POS, skillsFor, skillLegal, skillsActive, skillMul,
   LEAGUE_DEFS, leagueForRegion, makeGalaxy, galaxySimMD, galaxyRollover,
   ctMake, ctClub, ctGroupFixtures, ctSimGroups, ctGroupTable, ctAdvanceToKO, ctSimKORound, CT_ROUNDS, CT_GROUP_AFTER_MD
 };

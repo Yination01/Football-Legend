@@ -39,7 +39,7 @@ function renderLock(signedButNotAdmin) {
     '<p class="muted" style="margin-bottom:18px">Admin Console</p>' +
     (signedButNotAdmin
       ? '<div class="panel"><p>Signed in as <b>' + esc(session.user.email) + '</b>, but this account has no admin rights.</p>' +
-        '<p class="muted" style="margin-top:8px">Run the admin grant SQL for your account (see supabase/SETUP.md step 6), then reload.</p>' +
+        '<p class="muted" style="margin-top:8px">In Supabase SQL Editor run:<br><code style="color:var(--gold)">insert into admins (uid) select id from auth.users where email = \'' + esc(session.user.email) + '\';</code><br>then hard-reload. (Profile-based grants fail if you have not signed in inside the game yet — see grant-admin.sql)</p>' +
         '<button class="btn ghost" style="margin-top:14px" onclick="signOut()">Sign out</button></div>'
       : '<button class="btn gold" onclick="signIn()">\ud83d\udd11 Sign in with Google</button>') +
     '</div>';
@@ -54,6 +54,7 @@ var NAV = [
   ["events", "\ud83c\udf81", "Gifts & Events"],
   ["codes", "\ud83c\udfab", "Codes"],
   ["broadcast", "\ud83d\udce2", "Broadcast"],
+  ["seasons", "\ud83c\udfc6", "Seasons"],
   ["flags", "\ud83d\udea9", "Flagged"],
   ["admins", "\ud83d\udd10", "Admins"],
 ];
@@ -199,6 +200,44 @@ var PAGES = {
     });
   },
 
+  seasons: function () {
+    Promise.all([
+      sb.from("seasons").select("*").order("starts_at", { ascending: false }).limit(24),
+      sb.rpc("leaderboard_bal", { lim: 3 }),
+      sb.rpc("leaderboard_ml", { lim: 3 })
+    ]).then(function (res) {
+      var seasons = res[0].data || [];
+      var topB = res[1].data || [];
+      var topM = res[2].data || [];
+      var now = new Date();
+      var defId = now.getUTCFullYear() + "-" + String(now.getUTCMonth() + 1).padStart(2, "0");
+      var defLab = now.toLocaleString("en", { month: "long", year: "numeric" });
+      var rows = seasons.map(function (s) {
+        return "<tr><td><b>" + esc(s.id) + "</b><br><span class='muted'>" + esc(s.label) + "</span></td>" +
+          "<td>" + s.starts_at + " \u2192 " + s.ends_at + "</td>" +
+          "<td>" + (s.closed ? '<span class="pill r">closed</span>' : '<span class="pill g">open</span>') + "</td>" +
+          '<td><button class="btn sm" onclick="viewSeason(\'' + esc(s.id) + '\')">View</button></td></tr>';
+      }).join("") || "<tr><td colspan='4' class='muted'>No seasons closed yet.</td></tr>";
+      var liveB = topB.map(function (r, i) {
+        return (i + 1) + ". " + esc(r.pname) + " (" + r.rep + " rep)";
+      }).join("<br>") || "\u2014";
+      var liveM = topM.map(function (r, i) {
+        return (i + 1) + ". " + esc(r.club) + " (\ud83c\udfc6" + r.trophies + ")";
+      }).join("<br>") || "\u2014";
+      $("#main").innerHTML =
+        "<h1>Seasons</h1><div class='crumb'>Monthly snapshots + auto-gifts for top 3</div>" +
+        '<div class="panel"><h2>Close current season</h2>' +
+        '<p class="muted">Snapshots LIVE Legends + Clubs boards, writes season_ranks, and drops inbox gifts for #1\u2013#3. Idempotent per season id.</p>' +
+        '<label>Season ID</label><input id="sz_id" value="' + defId + '" />' +
+        '<label>Label</label><input id="sz_lab" value="' + esc(defLab) + '" />' +
+        '<button class="btn gold" style="margin-top:14px" onclick="closeSeason()">CLOSE & REWARD TOP 3</button></div>' +
+        '<div class="grid2"><div class="panel"><h2>Live top 3 · Legends</h2><p>' + liveB + "</p></div>" +
+        '<div class="panel"><h2>Live top 3 · Clubs</h2><p>' + liveM + "</p></div></div>" +
+        '<div class="panel"><h2>Past seasons</h2><table><thead><tr><th>Season</th><th>Window</th><th>Status</th><th></th></tr></thead><tbody>' +
+        rows + "</tbody></table></div>" +
+        '<div class="panel" id="sz_view" style="display:none"></div>';
+    });
+  },
   flags: function () {
     Promise.all([
       sb.from("flags").select("*").order("created_at", { ascending: false }).limit(100),
@@ -379,6 +418,39 @@ function sendBroadcast() {
   });
 }
 function delBroadcast(id) { sb.from("broadcasts").delete().eq("id", id).then(function () { PAGES.broadcast(); }); }
+
+// seasons
+function closeSeason() {
+  var id = ($("#sz_id").value || "").trim();
+  var lab = ($("#sz_lab").value || "").trim();
+  if (!id) return toast("Season ID required");
+  if (!confirm("Close season " + id + " and gift top 3 on both boards?")) return;
+  sb.rpc("season_close", { p_id: id, p_label: lab || id }).then(function (r) {
+    if (r.error) toast("Failed: " + r.error.message);
+    else toast("\ud83c\udfc6 Season closed · BaL " + (r.data && r.data.bal) + " · ML " + (r.data && r.data.ml));
+    PAGES.seasons();
+  });
+}
+function viewSeason(id) {
+  Promise.all([
+    sb.rpc("leaderboard_season", { mode: "bal", season_id: id, lim: 10 }),
+    sb.rpc("leaderboard_season", { mode: "ml", season_id: id, lim: 10 })
+  ]).then(function (res) {
+    var b = (res[0].data && res[0].data.rows) || [];
+    var m = (res[1].data && res[1].data.rows) || [];
+    function list(rows, mode) {
+      return rows.map(function (r) {
+        if (mode === "bal") return r.rank + ". " + esc(r.pname || r.name) + " \u00b7 " + (r.rep || 0) + " rep";
+        return r.rank + ". " + esc(r.club || r.name) + " \u00b7 \ud83c\udfc6" + (r.trophies || 0);
+      }).join("<br>") || "\u2014";
+    }
+    var el = $("#sz_view");
+    el.style.display = "block";
+    el.innerHTML = "<h2>Season " + esc(id) + "</h2>" +
+      '<div class="grid2"><div><b>Legends</b><p>' + list(b, "bal") + "</p></div>" +
+      "<div><b>Clubs</b><p>" + list(m, "ml") + "</p></div></div>";
+  });
+}
 
 // admins
 function addAdmin() {
