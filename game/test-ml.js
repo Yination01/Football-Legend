@@ -64,7 +64,8 @@ for (let season = 1; season <= 3; season++) {
   mlSeasonEnd();
   if (M.sacked) { check('sack path renders', true); break; }
   check('season advanced', M.season === before + 1 || M.sacked);
-  check('ages bumped sanely', M.squad.every(p => p.age >= 18 && p.age <= 40 && p.ovr >= 40 && p.ovr <= 94));
+  // Academy regens are allowed to be 17-year-olds (kid.age = 17 + rng*3); everything else stays in the veteran/potential band.
+  check('ages bumped sanely', M.squad.every(p => p.age >= 17 && p.age <= 40 && p.ovr >= 40 && p.ovr <= 94));
 }
 check('news populated', M === null || M.news.length > 0);
 check('career log', M === null || M.career.length >= 1);
