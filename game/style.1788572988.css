@@ -32,15 +32,15 @@ h2 { font-size: 1.1rem; margin-bottom: 10px; }
 
 /* Top bar */
 .topbar {
-  display: flex; justify-content: space-between; align-items: center;
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
   padding: 8px 2px 14px;
 }
-.logo { font-weight: 800; font-size: 1.05rem; letter-spacing: 1px; }
+.logo { font-weight: 800; font-size: 1.05rem; letter-spacing: 1px; white-space: nowrap; flex-shrink: 0; }
 .logo .brand1 { color: var(--green); }
 .logo .legend { color: var(--gold); }
-.wallet { display: flex; gap: 8px; }
+.wallet { display: flex; gap: 6px; min-width: 0; justify-content: flex-end; }
 .chip {
-  display: flex; align-items: center; gap: 5px;
+  display: flex; align-items: center; gap: 5px; white-space: nowrap; flex-shrink: 0;
   background: var(--panel); border: 1px solid var(--line);
   padding: 4px 10px; border-radius: 20px; font-size: .8rem; font-weight: 600;
 }
@@ -115,7 +115,9 @@ h2 { font-size: 1.1rem; margin-bottom: 10px; }
 .opt {
   flex: 1 1 30%; text-align: center; background: var(--panel2); border: 1px solid var(--line);
   padding: 10px 4px; border-radius: 10px; cursor: pointer; font-size: .85rem; font-weight: 600;
+  min-width: 0; /* let 3-up option grids shrink/wrap instead of overflowing the panel */
 }
+.opt .sub { font-size: .72rem; }
 .opt.sel { background: var(--green); color: #05130a; border-color: var(--green); }
 input[type=text] {
   width: 100%; padding: 12px; border-radius: 10px; border: 1px solid var(--line);
@@ -146,9 +148,14 @@ input[type=text] {
 .h2hpill.D { background: #8fa89a; color: #06130b; }
 .h2hpill.L { background: var(--red); }
 .formrow { display: flex; justify-content: space-between; font-size: .78rem; margin: 6px 0; }
-.kv { display: flex; justify-content: space-between; padding: 7px 0; border-bottom: 1px solid rgba(255,255,255,.06); font-size: .85rem; }
+.kv { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 7px 0; border-bottom: 1px solid rgba(255,255,255,.06); font-size: .85rem; }
 .kv:last-child { border-bottom: none; }
+.kv > span { min-width: 0; }
+.kv > span:first-child { flex: 1 1 auto; }
+.kv > b { flex: 0 1 auto; text-align: right; }
 .kv b { font-weight: 700; }
+/* action rows (market/card draws/welcome gift): button fixed, text gets the room */
+.kv .btn { flex: 0 0 auto; width: auto; min-width: 88px; margin: 0; padding: 9px 12px; font-size: .78rem; }
 
 /* Matchday */
 .scorehud {
@@ -339,6 +346,9 @@ input, textarea { user-select: text; -webkit-user-select: text; font-size: 16px 
 @media (max-width: 380px) {
   .optrow .opt { font-size: .72rem; }
   .speedrow .btn { padding: 8px 4px; font-size: .72rem; }
+  .logo { font-size: .88rem; letter-spacing: .5px; }
+  .topbar { gap: 6px; }
+  .chip { padding: 3px 7px; font-size: .7rem; }
 }
 
 /* ---- attack-state strip (live-score style) ---- */

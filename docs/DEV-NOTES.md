@@ -75,3 +75,10 @@ Hard-won knowledge from development. Check this before repeating an approach.
 - BaL `playerCardHTML` always renders the 6-stat grid (home uses `.pcard.compact`). Dead `small && hide stats` path is gone.
 - ML Squad: position sections + tap-to-expand TRAIN/SELL. Help kv rows removed. `_sqOpen` is UI-only (not persisted meaningfully; fine if it rides along in the save).
 - Ghost region brackets: design in `docs/GHOST-REGIONS.md` — do not implement until owner picks the four options.
+
+## Narrow-phone UI rules (v1.5.3)
+
+- **Never inline-size `.kv` action buttons** (market / card draws / welcome gift / CLAIM): the CSS `.kv .btn` rule keeps them compact (width auto, min 88px) so player text keeps ~160px at 320w. Sizing them inline (or leaving `width:100%`) re-breaks the old squashed two-column layout on small phones.
+- 3-up `.optrow` grids (Mentality, Playing Style, formations): use `flex:1 1 45%` (2+1 wrap), not `30%` — 30% columns clip their descriptions at ≤360w. `.opt { min-width:0 }` is required for wrap to work.
+- Topbar chips: the logo must not wrap; keep chips `white-space:nowrap` + `flex-shrink:0`, and the ≤380px media query shrinks logo/chips. Verified no horizontal overflow at 320w on ML screens.
+- Re-verified: 21/21 fairness, 356/356 ML, 50/50 v1.5, 27/27 ML-CT, 25/25 BaL-CT, 100/100 position-skills.
