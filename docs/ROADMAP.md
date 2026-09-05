@@ -11,6 +11,7 @@
 - **v1.2 World:** 6-league galaxy, Champions Trophy (groups + KO), cross-league transfers, January window, weekly market.
 - **v1.3:** BaL retirement/HoF, ML retirements + academy regens, gift events + redeem codes, owner panel.
 - **v1.4 Cloud:** Supabase backend, Google sign-in (web + native PKCE), server-validated saves, server codes, cloud gift inbox, live-ops events, broadcasts, admin console, global rankings.
+- **v1.5.2 UI:** BaL player card shows PAC–PHY on Home/Career; ML Squad decluttered (tap a player for TRAIN/SELL).
 - **v1.5 Live-ops + Ghost:**
   - **Ghost PvP** — async matches vs real players' validated ML cloud clubs (AI tactics, honest engine).
   - **News Inbox** — full broadcast history in-game (not banner-only).

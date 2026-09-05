@@ -349,17 +349,26 @@ function walletHTML() {
 }
 function playerCardHTML(small) {
   const eff = effStats();
-  const kit = myClub().col1;
-  return `<div class="pcard ${S.cardType}" style="--kit:${kit};${(S.cosmetics && S.cosmetics.trim) ? "box-shadow:0 0 18px rgba(242,201,76,.5);border-color:var(--gold);" : ""}">
+  const club = myClub();
+  const kit = club.col1, kit2 = club.col2 || "#fff";
+  const o = E.calcOVR(eff, S.pos);
+  const trim = S.cosmetics && S.cosmetics.trim;
+  const boots = S.cosmetics && S.cosmetics.boots;
+  const formTxt = S.form > 0 ? "+" + S.form : String(S.form);
+  const stats = ["PAC","SHO","PAS","DRI","DEF","PHY"].map(k =>
+    `<div class="stat"><b>${eff[k]}</b><span>${k}</span>${eff[k] > S.stats[k] ? `<span class="up">▲${eff[k]-S.stats[k]}</span>` : ""}</div>`).join("");
+  return `<div class="pcard ${S.cardType}${small ? " compact" : ""}" style="--kit:${kit};--kit2:${kit2};${trim ? "box-shadow:0 0 18px rgba(242,201,76,.5);border-color:var(--gold);" : ""}">
+    <div class="pcard-foil"></div>
     <span class="ctype">${cardLabel()}</span>
-    <div class="ovr">${E.calcOVR(eff, S.pos)}</div>
-    <div class="pos">${S.pos} · ${E.POSITIONS[S.pos].label}</div>
-    <div class="pos" style="color:var(--gold);font-size:.68rem">${(E.PLAYSTYLES[S.playstyle]||{}).label || ""}</div>
-    <div class="avatar"></div>
-    <div class="pname">${S.name}${(S.cosmetics && S.cosmetics.boots) ? " 👟" : ""}</div>
-    <div class="pclub">${myClub().name} · Season ${S.season}</div>
-    ${small ? "" : `<div class="statgrid">${["PAC","SHO","PAS","DRI","DEF","PHY"].map(k =>
-      `<div class="stat"><b>${eff[k]}</b><span>${k}</span>${eff[k] > S.stats[k] ? `<span class="up">▲${eff[k]-S.stats[k]}</span>` : ""}</div>`).join("")}</div>`}
+    <div class="pcard-top">
+      <div class="pcard-ovrcol"><div class="ovr">${o}</div><div class="pos">${S.pos}</div></div>
+      <div class="avatar"></div>
+    </div>
+    <div class="pname">${S.name}${boots ? " \ud83d\udc5f" : ""}</div>
+    <div class="pclub">${club.name} \u00b7 S${S.season} \u00b7 Lv ${S.level}</div>
+    <div class="pcard-meta"><span>${(E.PLAYSTYLES[S.playstyle]||{}).label || E.POSITIONS[S.pos].label}</span><span>form ${formTxt}</span></div>
+    <div class="statgrid">${stats}</div>
+    <div class="pcard-kit"></div>
   </div>`;
 }
 

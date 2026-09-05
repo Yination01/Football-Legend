@@ -18,6 +18,9 @@ function check(name, cond) { cond ? pass++ : fails.push(name); }
 
 mlNewSave('britain', 'Test FC');
 check('save created', M && M.squad.length === 18);
+const sqh = mlSquadScreen();
+check('squad position sections', typeof sqh === 'string' && sqh.includes('sqsec') && sqh.includes('GK') && sqh.includes('FW'));
+check('squad decluttered (no help kvs)', !sqh.includes('instant sale at 85%') && sqh.includes('data-sqrow') && sqh.includes('tap a player'));
 check('XI has 11', M.xi.length === 11);
 check('formation counts', (() => { const need = ML_FORMS[M.formation]; const ps = mlXIPlayers(); return ['GK','DF','MF','FW'].every(b => ps.filter(p => p.pos === b).length === need[b]); })());
 check('values sane', M.squad.every(p => p.value > 0 && p.value < 60 && p.wage > 0));
