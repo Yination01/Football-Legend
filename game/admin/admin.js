@@ -5,7 +5,7 @@ var SB_URL = "https://cdrcibinjssyqdufeqmk.supabase.co";
 var SB_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNkcmNpYmluanNzeXFkdWZlcW1rIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg1NDgzNzUsImV4cCI6MjEwNDEyNDM3NX0.BjU1Kxs-ekhGziInrAKUQ4TDrR6Iy4btwTyjMtkHuAI";
 
 var sb = window.supabase.createClient(SB_URL, SB_ANON);
-var session = null, isAdmin = false, page = "overview";
+var session = null, isAdmin = false, page = "overview", adminCheckError = null;
 var $ = function (q) { return document.querySelector(q); };
 
 function toast(msg) {
@@ -28,7 +28,8 @@ sb.auth.getSession().then(function (r) { session = r.data.session; gate(); });
 function gate() {
   if (!session) { renderLock(false); return; }
   sb.from("admins").select("uid").eq("uid", session.user.id).maybeSingle().then(function (r) {
-    isAdmin = !!r.data;
+    adminCheckError = r.error || null;
+    isAdmin = !adminCheckError && !!r.data;
     if (isAdmin) { render(); } else { renderLock(true); }
   });
 }
@@ -44,7 +45,11 @@ function renderLock(signedButNotAdmin) {
       : '<button class="btn gold" onclick="signIn()">\ud83d\udd11 Sign in with Google</button>') +
     '</div>';
 }
-function signIn() { sb.auth.signInWithOAuth({ provider: "google", options: { redirectTo: location.href.split("#")[0].split("?")[0] } }); }
+function signIn() {
+  sb.auth.signInWithOAuth({ provider: "google", options: { redirectTo: location.href.split("#")[0].split("?")[0] } })
+    .then(function (r) { if (r && r.error) throw r.error; })
+    .catch(function (e) { toast("Google sign-in failed: " + (e.message || "please try again")); });
+}
 function signOut() { sb.auth.signOut().then(function () { location.reload(); }); }
 
 // ---------- shell ----------
@@ -90,7 +95,7 @@ var PAGES = {
       }).join("") || '<p class="muted">No activity yet \u2014 charts appear once players sign in.</p>';
       var codeUses = (r[5].data || []).reduce(function (a, c) { return a + c.uses; }, 0);
       $("#main").innerHTML =
-        "<h1>Overview</h1><div class='crumb'>Live view of the player base</div>" +
+        "<h1>Overview <span class='pill g'>SUPERUSER</span></h1><div class='crumb'>Signed in as " + esc(session.user.email) + " · Live view of the player base</div>" +
         '<div class="cards">' +
         card("Registered players", r[0].count || 0, "all time") +
         card("Active (24h)", r[1].count || 0, "signed-in sessions") +

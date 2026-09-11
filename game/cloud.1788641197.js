@@ -27,10 +27,12 @@ var Cloud = (function () {
           var u = ev && ev.url ? ev.url : "";
           if (u.indexOf("://callback") !== -1 && u.indexOf("code=") !== -1) {
             var code = (u.split("code=")[1] || "").split("&")[0];
-            sb.auth.exchangeCodeForSession(code).then(function () {
+            try { code = decodeURIComponent(code); } catch (_) {}
+            sb.auth.exchangeCodeForSession(code).then(function (r) {
+              if (r && r.error) throw r.error;
               if (Capacitor.Plugins.Browser) Capacitor.Plugins.Browser.close().catch(function () {});
-              toast("\u2705 Signed in!");
-            }).catch(function () { toast("Sign-in failed \u2014 try again"); });
+              toast("\u2705 Signed in! Your cloud career is being restored.");
+            }).catch(function (err) { toast("Sign-in failed: " + authError(err)); });
           }
         });
       }
@@ -41,9 +43,24 @@ var Cloud = (function () {
       sb.auth.getSession().then(function (r) {
         session = r.data.session;
         if (session) onSignedIn();
+        // OAuth failures are returned in the URL; do not fail silently.
+        var params = new URLSearchParams(location.search);
+        var oauthError = params.get("error_description") || params.get("error");
+        if (oauthError) {
+          toast("Google sign-in failed: " + authError({ message: oauthError }));
+          if (window.history && window.history.replaceState) window.history.replaceState({}, document.title, location.pathname);
+        }
       });
     }
     return true;
+  }
+
+  function authError(err) {
+    var msg = err && (err.message || err.error_description || err.error);
+    if (!msg) return "please try again";
+    if (/redirect|uri/i.test(msg)) return "redirect is not configured for this app";
+    if (/popup|block/i.test(msg)) return "your browser blocked the sign-in window";
+    return msg;
   }
 
   function signIn() {
@@ -54,17 +71,20 @@ var Cloud = (function () {
         provider: "google",
         options: { redirectTo: "com.footballlegend.game://callback", skipBrowserRedirect: true },
       }).then(function (r) {
+        if (r && r.error) throw r.error;
         var url = r && r.data && r.data.url;
-        if (!url) { toast("Sign-in unavailable"); return; }
-        if (Capacitor.Plugins && Capacitor.Plugins.Browser) Capacitor.Plugins.Browser.open({ url: url });
-        else window.open(url, "_system");
-      });
+        if (!url) { toast("Google sign-in is unavailable. Check your connection."); return; }
+        if (Capacitor.Plugins && Capacitor.Plugins.Browser) return Capacitor.Plugins.Browser.open({ url: url });
+        window.open(url, "_system");
+      }).catch(function (err) { toast("Google sign-in failed: " + authError(err)); });
       return;
     }
     sb.auth.signInWithOAuth({
       provider: "google",
       options: { redirectTo: location.origin + location.pathname },
-    });
+    }).then(function (r) {
+      if (r && r.error) throw r.error;
+    }).catch(function (err) { toast("Google sign-in failed: " + authError(err)); });
   }
 
   function signOut() {
