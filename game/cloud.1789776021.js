@@ -8,6 +8,15 @@ var FL_CLOUD_URL = "https://cdrcibinjssyqdufeqmk.supabase.co";
 var FL_CLOUD_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNkcmNpYmluanNzeXFkdWZlcW1rIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg1NDgzNzUsImV4cCI6MjEwNDEyNDM3NX0.BjU1Kxs-ekhGziInrAKUQ4TDrR6Iy4btwTyjMtkHuAI"; // anon key: safe to ship, RLS enforces security
 
 var ML_CLOUD_KEY = "footballLegendML_v1";
+
+// Native deep link used by Google OAuth in the Android app. This exact URL MUST be
+// allow-listed in Supabase → Authentication → URL Configuration → Redirect URLs
+// (see supabase/SETUP.md step 3b). If it is missing, Supabase does NOT error — it
+// silently falls back to the Site URL, which is exactly why "sign-in only works on
+// web": the browser gets the session and the app never receives the callback.
+var FL_DEEP_SCHEME = "com.footballlegend.game";
+var FL_DEEP_LINK = FL_DEEP_SCHEME + "://callback";
+
 var Cloud = (function () {
   var sb = null;            // supabase client
   var session = null;       // current auth session
@@ -21,24 +30,20 @@ var Cloud = (function () {
     if (!enabled()) return false;
     if (!sb) {
       sb = window.supabase.createClient(FL_CLOUD_URL, FL_CLOUD_ANON, { auth: { flowType: "pkce", detectSessionInUrl: true } });
-      // Native app: OAuth must run in the system browser (Google blocks WebViews); deep link returns here
+      // Native app: OAuth must run in the system browser (Google blocks WebViews); the deep link returns here.
       if (window.Capacitor && Capacitor.Plugins && Capacitor.Plugins.App) {
         Capacitor.Plugins.App.addListener("appUrlOpen", function (ev) {
-          var u = ev && ev.url ? ev.url : "";
-          if (u.indexOf("://callback") !== -1 && u.indexOf("code=") !== -1) {
-            var code = (u.split("code=")[1] || "").split("&")[0];
-            try { code = decodeURIComponent(code); } catch (_) {}
-            sb.auth.exchangeCodeForSession(code).then(function (r) {
-              if (r && r.error) throw r.error;
-              if (Capacitor.Plugins.Browser) Capacitor.Plugins.Browser.close().catch(function () {});
-              toast("\u2705 Signed in! Your cloud career is being restored.");
-            }).catch(function (err) { toast("Sign-in failed: " + authError(err)); });
-          }
+          var u = ev && ev.url ? String(ev.url) : "";
+          if (u.indexOf(FL_DEEP_SCHEME + "://") === 0) handleAuthDeepLink(u);
         });
       }
       sb.auth.onAuthStateChange(function (_ev, s) {
         session = s;
-        if (s && s.user) onSignedIn();
+        if (s && s.user) {
+          onSignedIn();
+          if (_ev === "SIGNED_IN") maybeAutoOwner(); // fresh sign-in: admins get the Owner Panel automatically
+        }
+        notifyAuthUi();
       });
       sb.auth.getSession().then(function (r) {
         session = r.data.session;
@@ -58,23 +63,105 @@ var Cloud = (function () {
   function authError(err) {
     var msg = err && (err.message || err.error_description || err.error);
     if (!msg) return "please try again";
-    if (/redirect|uri/i.test(msg)) return "redirect is not configured for this app";
+    if (/redirect|uri/i.test(msg)) return "redirect is not configured for this app (see supabase/SETUP.md step 3b)";
     if (/popup|block/i.test(msg)) return "your browser blocked the sign-in window";
     return msg;
+  }
+
+  // Refresh the game UI the moment sign-in state changes. On the web the OAuth
+  // redirect reloads the page anyway; in the native app nothing reloads, so without
+  // this hook Settings keeps saying "not connected" and the Owner Panel tile never
+  // appears even though sign-in actually succeeded.
+  function notifyAuthUi() {
+    if (window.flOnCloudAuth) { try { window.flOnCloudAuth(signedIn()); } catch (e) {} }
+  }
+
+  function closeBrowser() {
+    try {
+      if (window.Capacitor && Capacitor.Plugins && Capacitor.Plugins.Browser && Capacitor.Plugins.Browser.close) {
+        Capacitor.Plugins.Browser.close().catch(function () {});
+      }
+    } catch (_) {}
+  }
+
+  // Handle "com.footballlegend.game://callback?code=…" (PKCE), "#access_token=…" (implicit)
+  // and "?error=…&error_code=…&error_description=…" deep links from Supabase.
+  // NOTE: error URLs carry `error_code`, whose name contains the substring "code=" —
+  // the old naive string-split could mistake it for an auth code and try to exchange
+  // garbage. Always parse real query params.
+  function handleAuthDeepLink(u) {
+    var params = {};
+    try {
+      var query = "";
+      var qi = u.indexOf("?");
+      var fi = u.indexOf("#");
+      if (qi !== -1) query = u.slice(qi + 1, (fi !== -1 && fi > qi) ? fi : undefined);
+      if (fi !== -1) query += (query ? "&" : "") + u.slice(fi + 1);
+      new URLSearchParams(query).forEach(function (v, k) { params[k] = v; });
+    } catch (_) {}
+
+    if (params.error || params.error_description) {
+      closeBrowser();
+      toast("Google sign-in failed: " + authError({ message: params.error_description || params.error }));
+      return;
+    }
+    if (params.code) {
+      sb.auth.exchangeCodeForSession(params.code).then(function (r) {
+        if (r && r.error) throw r.error;
+        closeBrowser();
+        toast("\u2705 Signed in! Your cloud career is being restored.");
+      }).catch(function (err) {
+        closeBrowser();
+        toast("Sign-in failed: " + authError(err));
+      });
+      return;
+    }
+    if (params.access_token && sb.auth.setSession) { // implicit-flow fallback
+      sb.auth.setSession({ access_token: params.access_token, refresh_token: params.refresh_token || "" }).then(function (r) {
+        if (r && r.error) throw r.error;
+        closeBrowser();
+        toast("\u2705 Signed in! Your cloud career is being restored.");
+      }).catch(function (err) {
+        closeBrowser();
+        toast("Sign-in failed: " + authError(err));
+      });
+    }
+  }
+
+  // Superuser convenience: a Google account listed in the server-side `admins` table
+  // gets the in-game Owner Panel automatically on sign-in — no owner key needed.
+  // RLS returns your own row only when you ARE an admin; everyone else gets an empty
+  // list. The 7×-tap owner-key flow (Cloud.verifyOwner) remains as the fallback for
+  // non-admin testers.
+  function maybeAutoOwner() {
+    if (!signedIn()) return Promise.resolve(false);
+    return fetch(FL_CLOUD_URL + "/rest/v1/admins?select=uid&uid=eq." + session.user.id, {
+      headers: { apikey: FL_CLOUD_ANON, authorization: "Bearer " + session.access_token },
+    }).then(function (r) { return r.ok ? r.json() : null; }).then(function (rows) {
+      var ok = !!(rows && rows.length);
+      if (ok) {
+        if (window.flOwnerUnlock) { try { window.flOwnerUnlock(); } catch (e) {} }
+        toast("\ud83d\udc51 Admin account \u2014 Owner Panel unlocked (main menu)");
+      }
+      return ok;
+    }).catch(function () { return false; });
   }
 
   function signIn() {
     if (!init()) { toast("Cloud not configured"); return; }
     var isNative = !!(window.Capacitor && Capacitor.isNativePlatform && Capacitor.isNativePlatform());
     if (isNative) {
+      toast("Opening Google sign-in\u2026 complete it in the browser \u2014 you'll return to the app automatically");
       sb.auth.signInWithOAuth({
         provider: "google",
-        options: { redirectTo: "com.footballlegend.game://callback", skipBrowserRedirect: true },
+        options: { redirectTo: FL_DEEP_LINK, skipBrowserRedirect: true },
       }).then(function (r) {
         if (r && r.error) throw r.error;
         var url = r && r.data && r.data.url;
         if (!url) { toast("Google sign-in is unavailable. Check your connection."); return; }
-        if (Capacitor.Plugins && Capacitor.Plugins.Browser) return Capacitor.Plugins.Browser.open({ url: url });
+        if (Capacitor.Plugins && Capacitor.Plugins.Browser && Capacitor.Plugins.Browser.open) {
+          return Capacitor.Plugins.Browser.open({ url: url }).catch(function () { window.open(url, "_system"); });
+        }
         window.open(url, "_system");
       }).catch(function (err) { toast("Google sign-in failed: " + authError(err)); });
       return;
@@ -90,6 +177,7 @@ var Cloud = (function () {
   function signOut() {
     if (sb) sb.auth.signOut();
     session = null;
+    notifyAuthUi();
     toast("Signed out \u2014 game continues offline");
   }
 
@@ -268,7 +356,7 @@ var Cloud = (function () {
            fetchBroadcast: fetchBroadcast, fetchBroadcasts: fetchBroadcasts,
            fetchLeaderboard: fetchLeaderboard, fetchGhosts: fetchGhosts,
            fetchSeasonBoard: fetchSeasonBoard, fetchSeasons: fetchSeasons,
-           verifyOwner: verifyOwner, accountEmail: accountEmail };
+           verifyOwner: verifyOwner, checkAdmin: maybeAutoOwner, accountEmail: accountEmail };
 })();
 
 // boot: harmless when unconfigured

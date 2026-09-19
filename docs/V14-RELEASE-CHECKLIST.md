@@ -2,9 +2,11 @@
 
 ## ⚠️ BEFORE building the final APK (one-time cloud config)
 
-1. **Supabase redirect URLs** — Dashboard → Authentication → URL Configuration → *Redirect URLs* → add BOTH:
+1. **Supabase redirect URLs** — Dashboard → Authentication → URL Configuration → *Redirect URLs* → add ALL THREE (a missing entry doesn't error — Supabase silently falls back to the Site URL, which is why "login only worked on web"):
    - `com.footballlegend.game://callback`   ← the Android app's deep link (sign-in inside the APK fails without this!)
-   - `https://yination01.github.io/Football-Legend/game/`   ← web version + admin console
+   - `https://yination01.github.io/Football-Legend/game/**`   ← web version **and** the `/admin/` console (the wildcard matters — `/game/` alone does NOT cover `/game/admin/`; after console sign-in you'd land on the game page and never see the admin panel)
+   - `http://localhost:8000/**`   ← local testing
+   Full details + sanity test: `game/supabase/SETUP.md` step 3b.
 2. **GitHub Pages** — repo → Settings → Pages → *Deploy from a branch* → `main` / root → Save.
    - Game: `https://yination01.github.io/Football-Legend/game/`
    - Admin console: `https://yination01.github.io/Football-Legend/game/admin/`
@@ -47,7 +49,9 @@ cd android && ./gradlew assembleRelease && ./gradlew bundleRelease
 ## Phone test plan (do these on the real device)
 
 - [ ] Install over v1.3 — existing saves intact
-- [ ] Settings → Account → SIGN IN WITH GOOGLE → system browser opens → returns to app signed in
+- [ ] Settings → Account → SIGN IN WITH GOOGLE → system browser opens → **returns to the app** (deep link) → Settings flips to "✅ you@gmail.com" without leaving the screen
+- [ ] Sign in with your **admin** Google account (web or app) → 👑 Owner Panel tile appears on the main menu automatically (no key needed)
+- [ ] Admin console → sign in with same admin account → lands on Overview with the SUPERUSER pill (not the lock screen)
 - [ ] Play a matchday → check Supabase Table Editor → `saves` row updated (cloud sync works)
 - [ ] Admin console (Pages URL) → gift yourself from Players tab → reopen app → gift arrives
 - [ ] Create an event in the console → Gifts & Events tile in-app shows it (within ~5 min)
@@ -57,7 +61,7 @@ cd android && ./gradlew assembleRelease && ./gradlew bundleRelease
 - [ ] ML → Table → league tabs + Champions Trophy panel render
 - [ ] Gifts screen → history panel lists past rewards (up to 30)
 - [ ] **Ghost PvP** → list shows cloud clubs → play one → honest odds → result screen
-- [ ] **Owner unlock** → 7 taps on Player ID while signed in → server verifies key
+- [ ] **Owner unlock (key fallback)** → sign in with a NON-admin account → 7 taps on Player ID → owner key → server verifies (`node scripts/owner-key-hash.mjs yourkey` gives the OWNER_KEY_HASH secret value)
 - [ ] **Seasons** (admin) → Close season → top 3 receive inbox gifts on next sign-in
 - [ ] Global Rankings → LIVE + past season chips render
 
