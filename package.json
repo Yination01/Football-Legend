@@ -15,6 +15,7 @@
     "test:bal-ct": "node game/test-bal-ct.js",
     "test:skills": "node game/test-position-skills.js",
     "test:v15": "node game/test-v15.js",
+    "test:auth": "node game/test-auth-sim.js",
     "test:syntax": "node .audit/syntax.cjs",
     "test:unshipped": "node .audit/unshipped.cjs",
     "copy-game": "npm --prefix app run copy-game",

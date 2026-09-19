@@ -4,7 +4,7 @@
 var SB_URL = "https://cdrcibinjssyqdufeqmk.supabase.co";
 var SB_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNkcmNpYmluanNzeXFkdWZlcW1rIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg1NDgzNzUsImV4cCI6MjEwNDEyNDM3NX0.BjU1Kxs-ekhGziInrAKUQ4TDrR6Iy4btwTyjMtkHuAI";
 
-var sb = window.supabase.createClient(SB_URL, SB_ANON);
+var sb = window.supabase.createClient(SB_URL, SB_ANON, { auth: { flowType: "pkce", detectSessionInUrl: true } });
 var session = null, isAdmin = false, page = "overview", adminCheckError = null;
 var $ = function (q) { return document.querySelector(q); };
 
@@ -24,6 +24,19 @@ function fmtAgo(d) {
 // ---------- auth ----------
 sb.auth.onAuthStateChange(function (_e, s) { session = s; gate(); });
 sb.auth.getSession().then(function (r) { session = r.data.session; gate(); });
+// OAuth failures come back in the URL (?error=… / #error=…) — never fail silently:
+// the usual cause is this console's URL missing from Supabase → URL Configuration → Redirect URLs.
+(function reportOAuthError() {
+  try {
+    var q = new URLSearchParams(location.search);
+    var h = new URLSearchParams(String(location.hash || "").replace(/^#/, ""));
+    var err = q.get("error_description") || q.get("error") || h.get("error_description") || h.get("error");
+    if (err) {
+      toast("Google sign-in failed: " + err);
+      if (window.history && window.history.replaceState) window.history.replaceState({}, document.title, location.pathname);
+    }
+  } catch (e) {}
+})();
 
 function gate() {
   if (!session) { renderLock(false); return; }
@@ -35,12 +48,18 @@ function gate() {
 }
 
 function renderLock(signedButNotAdmin) {
+  var diag = "";
+  if (signedButNotAdmin && adminCheckError) {
+    diag = '<p class="muted" style="margin-top:10px;color:var(--red)">The admin check itself failed — the database schema may be missing:<br><code>' +
+      esc(adminCheckError.message || String(adminCheckError)) + '</code><br>Run <b>supabase/schema.sql</b> (and <b>supabase/leaderboard.sql</b>) in the SQL Editor, then reload.</p>';
+  }
   $("#app").innerHTML =
     '<div class="lock"><div class="logo">\u26bd FOOTBALL <span style="color:var(--gold)">LEGEND</span></div>' +
     '<p class="muted" style="margin-bottom:18px">Admin Console</p>' +
     (signedButNotAdmin
       ? '<div class="panel"><p>Signed in as <b>' + esc(session.user.email) + '</b>, but this account has no admin rights.</p>' +
-        '<p class="muted" style="margin-top:8px">In Supabase SQL Editor run:<br><code style="color:var(--gold)">insert into admins (uid) select id from auth.users where email = \'' + esc(session.user.email) + '\';</code><br>then hard-reload. (Profile-based grants fail if you have not signed in inside the game yet — see grant-admin.sql)</p>' +
+        '<p class="muted" style="margin-top:8px">In Supabase SQL Editor run:<br><code style="color:var(--gold)">insert into admins (uid) values (\'' + esc(session.user.id) + '\');</code><br>or by email:<br><code style="color:var(--gold)">insert into admins (uid) select id from auth.users where email = \'' + esc(session.user.email) + '\';</code><br>then hard-reload. (Profile-based grants fail if you have not signed in inside the game yet — see grant-admin.sql)</p>' +
+        diag +
         '<button class="btn ghost" style="margin-top:14px" onclick="signOut()">Sign out</button></div>'
       : '<button class="btn gold" onclick="signIn()">\ud83d\udd11 Sign in with Google</button>') +
     '</div>';

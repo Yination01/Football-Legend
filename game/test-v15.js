@@ -120,12 +120,59 @@ function hashSeedVO(str) {
 check("hashSeed lockstep", hashSeedVO("flown:abc") === E.hashSeed("flown:abc"));
 check("hashSeed empty lockstep", hashSeedVO("") === E.hashSeed(""));
 
+// auth-flow hardening (v1.5.3): deep link parsing, auto-owner, admin console pkce
+check("cloud deep link constant", cloudTxt.includes("com.footballlegend.game://"));
+check("cloud parses oauth error deep links", cloudTxt.includes("error_description"));
+check("cloud auto-owner for admin accounts", cloudTxt.includes("maybeAutoOwner") && cloudTxt.includes("/rest/v1/admins"));
+check("app cloud auth UI hook", appTxt.includes("window.flOnCloudAuth"));
+check("app owner unlock hook", appTxt.includes("window.flOwnerUnlock"));
+check("admin console pkce flow", adminTxt.includes("pkce"));
+check("admin console url error surfacing", adminTxt.includes("reportOAuthError"));
+
+// ---- native deep-link env (Capacitor mocks + spies) ----
+let capturedUrlCb = null, exchangedCodes = [], sessionSets = [], toastMsgs = [], browserClosed = 0;
+global.toast = (m) => { toastMsgs.push(String(m)); };
+global.Capacitor = {
+  isNativePlatform: () => true,
+  Plugins: {
+    App: { addListener: (ev, cb) => { if (ev === "appUrlOpen") capturedUrlCb = cb; } },
+    Browser: { open: () => Promise.resolve(), close: () => { browserClosed++; return Promise.resolve(); } },
+  },
+};
+global.supabase = {
+  createClient() {
+    return {
+      auth: {
+        onAuthStateChange(){},
+        getSession(){ return Promise.resolve({ data: { session: null } }); },
+        signInWithOAuth(){ return Promise.resolve({ data: {} }); },
+        signOut(){ return Promise.resolve(); },
+        exchangeCodeForSession(code){ exchangedCodes.push(String(code)); return Promise.resolve({ data: { session: null }, error: null }); },
+        setSession(tok){ sessionSets.push(tok); return Promise.resolve({ data: { session: null }, error: null }); },
+      }
+    };
+  }
+};
+
 // ---- load cloud.js ----
 (0, eval)(cloudTxt.replace('"use strict";', ""));
 check("Cloud object", typeof Cloud === "object");
 check("Cloud.enabled", Cloud.enabled() === true);
 check("Cloud APIs", typeof Cloud.fetchGhosts === "function" && typeof Cloud.verifyOwner === "function"
   && typeof Cloud.fetchBroadcasts === "function" && typeof Cloud.fetchSeasons === "function");
+
+// ---- appUrlOpen deep-link behaviour ----
+check("native deep-link listener registered", typeof capturedUrlCb === "function");
+if (capturedUrlCb) {
+  capturedUrlCb({ url: "com.footballlegend.game://callback?code=TESTCODE123" });
+  check("deep link exchanges auth code", exchangedCodes.length === 1 && exchangedCodes[0] === "TESTCODE123", exchangedCodes.join(","));
+  capturedUrlCb({ url: "com.footballlegend.game://callback?error=server_error&error_code=unexpected&error_description=redirect_uri_not_allowed" });
+  check("error_code not misread as auth code", exchangedCodes.length === 1, exchangedCodes.join(","));
+  check("oauth error deep link surfaces toast", toastMsgs.some(m => /sign-in failed/i.test(m)), toastMsgs.join(" | "));
+  capturedUrlCb({ url: "https://some.other.page/cb?code=NOPE" });
+  check("foreign URLs ignored", exchangedCodes.length === 1 && sessionSets.length === 0);
+}
+global.Capacitor = undefined; // keep the app.js eval environment browser-like
 
 // ---- load app.js ----
 let appSrc = appTxt.replace('"use strict";', "").replace(/^(const|let) /gm, "var ");

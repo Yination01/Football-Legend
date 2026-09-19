@@ -398,6 +398,28 @@ function flBack() {
 }
 window.flBack = flBack;
 window.addEventListener("popstate", () => { flBack(); });
+
+// ---------- Cloud auth UI hooks (called from cloud.js) ----------
+// Web Google sign-in reloads the page via OAuth redirect; native does not — so re-render
+// the visible screen on every auth transition. Without this, Settings keeps showing
+// "not connected" and the Owner Panel tile never appears after native sign-in even
+// though the session succeeded.
+window.flOnCloudAuth = function (nowSignedIn) {
+  try {
+    if (window.__flLastAuth === !!nowSignedIn) return; // transitions only, not every token refresh
+    window.__flLastAuth = !!nowSignedIn;
+    if (FL_CUR === settingsScreen || FL_CUR === menuScreen || FL_CUR === ownerScreen) render(FL_CUR);
+  } catch (e) {}
+};
+// Server-verified superuser: cloud.js calls this when the signed-in Google account is
+// listed in the admins table — owner mode turns on without needing the owner key.
+window.flOwnerUnlock = function () {
+  try {
+    if (getSet().ownerMode === true) return;
+    setSet("ownerMode", true);
+    if (FL_CUR === menuScreen || FL_CUR === settingsScreen) render(FL_CUR);
+  } catch (e) {}
+};
 // Capacitor native back button (wrapped app)
 try {
   if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App) {
@@ -3995,7 +4017,7 @@ function settingsScreen() {
             else toast("\u274c " + ((r && r.msg) || "Wrong key"));
           });
         } else {
-          toast("\u274c Sign in with Google first \u2014 owner unlock is server-verified");
+          toast("\u274c Sign in with Google first \u2014 admin accounts unlock the Owner Panel automatically; the key is only for other testers");
         }
       }
     };

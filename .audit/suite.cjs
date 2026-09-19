@@ -145,6 +145,13 @@ runStep('Ghost PvP, Cloud Saves & v1.5 Features (test-v15.js)', () => {
   return parseInt(m[1], 10);
 });
 
+runStep('Auth E2E: OAuth web/app/admin simulation (test-auth-sim.js)', () => {
+  const out = execSync('node test-auth-sim.js', { cwd: path.join(ROOT, 'game'), encoding: 'utf8' });
+  const m = out.match(/(\d+)\s+passed,\s+(\d+)\s+failed/);
+  if (!m || parseInt(m[2], 10) > 0) throw new Error(`Auth simulation failed: ${out}`);
+  return parseInt(m[1], 10);
+});
+
 // 4. Summary & Build State
 banner('4. Audit Summary & Build State');
 
