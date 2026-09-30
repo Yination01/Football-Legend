@@ -3153,7 +3153,7 @@ function ownerScreen() {
       txt += "\ngifts queued: " + (localStorage.getItem("flMlGifts") || "[]");
       $("#owdbgout").value = txt; $("#owdbgout").style.display = "block";
     };
-    const off = $("#owoff"); if (off) off.onclick = () => { setSet("ownerMode", false); toast("Owner mode OFF"); render(menuScreen); };
+    const off = $("#owoff"); if (off) off.onclick = () => { setSet("ownerMode", false); setSet("ownerSource", null); toast("Owner mode OFF"); render(menuScreen); };
     $("#owback").onclick = () => render(menuScreen);
   }, 0);
   return `<div class="screen">
@@ -3991,7 +3991,7 @@ function settingsScreen() {
         if (window.Cloud && Cloud.enabled() && Cloud.signedIn() && Cloud.verifyOwner) {
           toast("Verifying\u2026");
           Cloud.verifyOwner(key.trim()).then(r => {
-            if (r && r.ok) { setSet("ownerMode", true); toast("\ud83d\udc51 Owner mode ON"); render(menuScreen); }
+            if (r && r.ok) { setSet("ownerMode", true); setSet("ownerSource", "key"); toast("\ud83d\udc51 Owner mode ON"); render(menuScreen); }
             else toast("\u274c " + ((r && r.msg) || "Wrong key"));
           });
         } else {

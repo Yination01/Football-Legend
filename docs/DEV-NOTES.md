@@ -57,6 +57,8 @@ Hard-won knowledge from development. Check this before repeating an approach.
 
 - `app/copy-game.js` must point at `../game` (was a stale `../naija-legend` path — broke every APK content sync).
 - Owner key: NEVER re-introduce `FL_OWNER_HASH` into `app.js`. Verification is `Cloud.verifyOwner` → edge fn `verify-owner` using the same `hashSeed` as `engine.js` (FNV-ish with 1779033703 / 3432918353 — not the plain FNV-1a constants).
+- Admin identity is unified: after Google sign-in, `Cloud.checkAdmin()` checks the RLS-protected `admins` table and unlocks the in-app Owner Panel for confirmed admins. Key verification remains an emergency fallback. Signing out removes an admin-derived unlock, but not a key-derived unlock.
+- Native OAuth must process both `appUrlOpen` (warm return) and `App.getLaunchUrl()` (cold start). The callback is exactly `com.footballlegend.game://callback` and must be allowed in Supabase Authentication URL Configuration.
 - Ghost PvP depends on `FR_MENTS` / `FR_STYLES` / `frDuel` being declared **above** the ghost block in `app.js`.
 - `leaderboard.sql` is re-runnable (create or replace + drop policy if exists). Admins close seasons via `season_close` RPC; rewards land in `inbox` like any other gift.
 - Headless v1.5 harness: `game/test-v15.js` (stubs `window.addEventListener`, loads full app.js).

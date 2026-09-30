@@ -11,6 +11,8 @@ var ML_CLOUD_KEY = "footballLegendML_v1";
 var Cloud = (function () {
   var sb = null;            // supabase client
   var session = null;       // current auth session
+  var admin = false;        // server-confirmed membership in public.admins
+  var authCallbackBusy = false;
   var lastSync = { bal: 0, ml: 0 };
   var SYNC_COOLDOWN = 90 * 1000; // min ms between pushes per mode (quota safety)
 
@@ -21,20 +23,17 @@ var Cloud = (function () {
     if (!enabled()) return false;
     if (!sb) {
       sb = window.supabase.createClient(FL_CLOUD_URL, FL_CLOUD_ANON, { auth: { flowType: "pkce", detectSessionInUrl: true } });
-      // Native app: OAuth must run in the system browser (Google blocks WebViews); deep link returns here
+      // Native app: OAuth must run in the system browser (Google blocks WebViews).
+      // Handle both a warm return and a cold start caused by the callback.
       if (window.Capacitor && Capacitor.Plugins && Capacitor.Plugins.App) {
         Capacitor.Plugins.App.addListener("appUrlOpen", function (ev) {
-          var u = ev && ev.url ? ev.url : "";
-          if (u.indexOf("://callback") !== -1 && u.indexOf("code=") !== -1) {
-            var code = (u.split("code=")[1] || "").split("&")[0];
-            try { code = decodeURIComponent(code); } catch (_) {}
-            sb.auth.exchangeCodeForSession(code).then(function (r) {
-              if (r && r.error) throw r.error;
-              if (Capacitor.Plugins.Browser) Capacitor.Plugins.Browser.close().catch(function () {});
-              toast("\u2705 Signed in! Your cloud career is being restored.");
-            }).catch(function (err) { toast("Sign-in failed: " + authError(err)); });
-          }
+          processAuthUrl(ev && ev.url);
         });
+        if (Capacitor.Plugins.App.getLaunchUrl) {
+          Capacitor.Plugins.App.getLaunchUrl().then(function (r) {
+            if (r && r.url) processAuthUrl(r.url);
+          }).catch(function () {});
+        }
       }
       sb.auth.onAuthStateChange(function (_ev, s) {
         session = s;
@@ -53,6 +52,25 @@ var Cloud = (function () {
       });
     }
     return true;
+  }
+
+  function processAuthUrl(rawUrl) {
+    if (!rawUrl || authCallbackBusy || !sb) return;
+    var u;
+    try { u = new URL(rawUrl); } catch (_) { toast("Google sign-in returned an invalid callback."); return; }
+    if (u.protocol !== "com.footballlegend.game:" || u.hostname !== "callback") return;
+    var oauthError = u.searchParams.get("error_description") || u.searchParams.get("error");
+    if (oauthError) { toast("Google sign-in failed: " + authError({ message: oauthError })); return; }
+    var code = u.searchParams.get("code");
+    if (!code) { toast("Google sign-in returned without an authorization code."); return; }
+    authCallbackBusy = true;
+    sb.auth.exchangeCodeForSession(code).then(function (r) {
+      if (r && r.error) throw r.error;
+      if (Capacitor.Plugins && Capacitor.Plugins.Browser) Capacitor.Plugins.Browser.close().catch(function () {});
+      toast("\u2705 Signed in! Your cloud career is being restored.");
+    }).catch(function (err) {
+      toast("Sign-in failed: " + authError(err));
+    }).then(function () { authCallbackBusy = false; });
   }
 
   function authError(err) {
@@ -90,6 +108,11 @@ var Cloud = (function () {
   function signOut() {
     if (sb) sb.auth.signOut();
     session = null;
+    admin = false;
+    if (typeof getSet === "function" && typeof setSet === "function" && getSet().ownerSource === "admin") {
+      setSet("ownerMode", false);
+      setSet("ownerSource", null);
+    }
     toast("Signed out \u2014 game continues offline");
   }
 
@@ -105,7 +128,22 @@ var Cloud = (function () {
     }).then(function (r) { return r.json().then(function (j) { return { status: r.status, body: j }; }); });
   }
 
+  function checkAdmin() {
+    if (!signedIn() || !sb) return Promise.resolve(false);
+    return sb.from("admins").select("uid").eq("uid", session.user.id).maybeSingle().then(function (r) {
+      admin = !r.error && !!r.data;
+      if (admin && typeof setSet === "function") {
+        setSet("ownerMode", true);
+        setSet("ownerSource", "admin");
+        if (typeof render === "function" && typeof menuScreen === "function") render(menuScreen);
+      }
+      return admin;
+    }).catch(function () { admin = false; return false; });
+  }
+
   function onSignedIn() {
+    // Server-confirmed admins receive the in-app owner surface automatically.
+    checkAdmin();
     // register (idempotent) then pull cloud state
     fn("sync-save", { mode: "register", playerId: flPlayerId(), name: (S && S.name) || "Legend" })
       .then(function () { return fn("sync-save", { mode: "pull" }); })
@@ -262,13 +300,15 @@ var Cloud = (function () {
   }
 
   function accountEmail() { return signedIn() ? (session.user.email || "Google account") : null; }
+  function isAdmin() { return admin; }
 
   return { init: init, enabled: enabled, signedIn: signedIn, signIn: signIn, signOut: signOut,
            push: push, redeemOnline: redeemOnline, fetchEvents: fetchEvents,
            fetchBroadcast: fetchBroadcast, fetchBroadcasts: fetchBroadcasts,
            fetchLeaderboard: fetchLeaderboard, fetchGhosts: fetchGhosts,
            fetchSeasonBoard: fetchSeasonBoard, fetchSeasons: fetchSeasons,
-           verifyOwner: verifyOwner, accountEmail: accountEmail };
+           verifyOwner: verifyOwner, checkAdmin: checkAdmin, isAdmin: isAdmin,
+           accountEmail: accountEmail };
 })();
 
 // boot: harmless when unconfigured
