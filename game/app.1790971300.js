@@ -3022,11 +3022,18 @@ function flQueueMlGift(g) { // ML applies it on next ML.enter()
     localStorage.setItem("flMlGifts", JSON.stringify(q)); if (window.flMirror) flMirror("flMlGifts", JSON.stringify(q));
   } catch (e) {}
 }
+function flQueueInboxGift(g) {
+  try {
+    const q = JSON.parse(localStorage.getItem("flInboxGifts") || "[]");
+    q.unshift(Object.assign({ id: "gift:" + Date.now(), at: Date.now() }, g));
+    localStorage.setItem("flInboxGifts", JSON.stringify(q.slice(0, 50)));
+  } catch (e) {}
+}
 function flApplyGift(g) { // BaL part instantly, ML part queued
   if (S && !S.retired) {
     if (g.gp) S.gp += g.gp;
     if (g.lc) S.nl += g.lc;
-    if (g.gp || g.lc) pushNews("\ud83c\udf81 " + (g.title || "Gift") + ": +" + (g.gp || 0) + " GP, +" + (g.lc || 0) + " LC!");
+    if (g.gp || g.lc) pushNews("🎁 " + (g.title || "Gift") + ": +" + (g.gp || 0) + " GP, +" + (g.lc || 0) + " LC!");
     save();
   }
   if (g.mlgp || g.mllc || g.pl) flQueueMlGift({ id: g.id, title: g.title, mlgp: g.mlgp, mllc: g.mllc, pl: g.pl });
@@ -3269,6 +3276,7 @@ function ownerScreen() {
           to: new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 10),
           ...giftPayload
         });
+        flQueueInboxGift(giftPayload);
         flApplyGift(giftPayload);
         if (window.Cloud && Cloud.enabled() && Cloud.signedIn() && window.supabase) {
           try {
@@ -3283,10 +3291,11 @@ function ownerScreen() {
             }]).then(() => {}).catch(() => {});
           } catch (e) {}
         }
-        toast("🎁 Global gift sent to ALL users!");
+        toast("🎁 Global gift sent & added to user inboxes!");
       } else if (tgt === "self" || !pid || pid === flPlayerId()) {
+        flQueueInboxGift(giftPayload);
         flApplyGift(giftPayload);
-        toast("🎁 Gift added to your account!");
+        toast("🎁 Gift added to your inbox & claimed!");
       } else {
         // Specific player ID
         if (window.Cloud && Cloud.enabled() && Cloud.signedIn() && window.supabase) {
@@ -3588,7 +3597,22 @@ function newsInboxScreen() {
       if (document.querySelector("#newsback")) render(newsInboxScreen);
     }).catch(() => {});
   }
+  const inboxGifts = (() => {
+    try { return JSON.parse(localStorage.getItem("flInboxGifts") || "[]"); } catch (e) { return []; }
+  })();
+
   setTimeout(() => {
+    document.querySelectorAll("[data-claiminbox]").forEach(b => b.onclick = (e) => {
+      e.stopPropagation();
+      const gid = b.dataset.claiminbox;
+      const g = inboxGifts.find(x => x.id === gid);
+      if (!g) return;
+      flApplyGift(g);
+      const rem = inboxGifts.filter(x => x.id !== gid);
+      localStorage.setItem("flInboxGifts", JSON.stringify(rem));
+      toast("🎁 Claimed: " + (g.title || "Reward"));
+      render(newsInboxScreen);
+    });
     document.querySelectorAll("[data-news]").forEach(el => el.onclick = () => {
       flNewsMark(el.dataset.news);
       el.style.opacity = "0.7";
@@ -3642,6 +3666,20 @@ function newsInboxScreen() {
         <span class="badge gold" style="font-size:.72rem">v1.5 (Preview 15)</span>
       </div>
     </div>
+    ${inboxGifts.length ? `
+    <div class="panel" style="border:1px solid var(--gold);background:rgba(235,178,35,.07)">
+      <h2>🎁 Unclaimed Gifts & Rewards (${inboxGifts.length})</h2>
+      <p class="sub">Tap claim to receive coins, LC, and special player cards directly into your profile.</p>
+      ${inboxGifts.map(g => `
+        <div class="kv" style="padding:6px 0">
+          <span><b>${g.title || "Reward Gift"}</b><br>
+            <span class="sub">
+              ${[g.gp ? g.gp + " BaL GP" : "", g.lc ? g.lc + " BaL LC" : "", g.mlgp ? g.mlgp + "M ML GP" : "", g.mllc ? g.mllc + " ML LC" : "", g.pl ? g.pl.card + " " + g.pl.pos + " (" + g.pl.ovr + ")" : ""].filter(Boolean).join(" · ")}
+            </span>
+          </span>
+          <button class="btn gold" data-claiminbox="${g.id}">CLAIM</button>
+        </div>`).join("")}
+    </div>` : ""}
     <div class="panel" style="border:1px solid var(--gold);background:rgba(255,215,94,.05)">
       <div class="kv"><span style="color:var(--gold);font-weight:800;font-size:.9rem">⚡ WHAT'S NEW IN LATEST PATCH</span><span class="sub">Preview 15</span></div>
       <ul style="margin:8px 0 0;padding-left:18px;line-height:1.5;font-size:.82rem;color:var(--sub)">

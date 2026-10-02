@@ -253,16 +253,28 @@ function mlAutoXI(byFitness) {
   }
   M.xi = xi;
 }
-function mlAutoBench() {
+function mlAutoBench(mode) {
   const nonXI = M.squad.filter(p => !M.xi.includes(p.id));
   const bench = [];
-  const gk = nonXI.filter(p => p.pos === "GK").sort((a, b) => (b.fit * 0.3 + b.ovr) - (a.fit * 0.3 + a.ovr))[0];
-  if (gk) bench.push(gk.id);
-  const sorted = nonXI.filter(p => !bench.includes(p.id))
-    .sort((a, b) => (effOvr(b) * 0.6 + b.fit * 0.4) - (effOvr(a) * 0.6 + a.fit * 0.4));
-  for (const p of sorted) {
-    if (bench.length >= 10) break;
-    bench.push(p.id);
+  if (mode === "ovr") {
+    // Pure highest OVR reserves
+    const sorted = nonXI.slice().sort((a, b) => (b.ovr * 0.7 + b.fit * 0.3) - (a.ovr * 0.7 + a.fit * 0.3));
+    for (const p of sorted) {
+      if (bench.length >= 10) break;
+      bench.push(p.id);
+    }
+  } else {
+    // Positionally balanced: 1 GK, up to 3 DF, up to 4 MF, up to 2 FW
+    const gk = nonXI.filter(p => p.pos === "GK").sort((a, b) => (b.fit * 0.3 + b.ovr) - (a.fit * 0.3 + a.ovr))[0];
+    if (gk) bench.push(gk.id);
+    const dfs = nonXI.filter(p => p.pos === "DF" && !bench.includes(p.id)).sort((a, b) => (b.ovr * 0.6 + b.fit * 0.4) - (a.ovr * 0.6 + a.fit * 0.4)).slice(0, 3);
+    dfs.forEach(p => bench.push(p.id));
+    const mfs = nonXI.filter(p => p.pos === "MF" && !bench.includes(p.id)).sort((a, b) => (b.ovr * 0.6 + b.fit * 0.4) - (a.ovr * 0.6 + a.fit * 0.4)).slice(0, 4);
+    mfs.forEach(p => bench.push(p.id));
+    const fws = nonXI.filter(p => p.pos === "FW" && !bench.includes(p.id)).sort((a, b) => (b.ovr * 0.6 + b.fit * 0.4) - (a.ovr * 0.6 + a.fit * 0.4)).slice(0, 2);
+    fws.forEach(p => bench.push(p.id));
+    const rem = nonXI.filter(p => !bench.includes(p.id)).sort((a, b) => (b.ovr * 0.6 + b.fit * 0.4) - (a.ovr * 0.6 + a.fit * 0.4));
+    while (bench.length < 10 && rem.length) bench.push(rem.shift().id);
   }
   M.bench = bench;
   mlSave();
@@ -1163,9 +1175,23 @@ function mlBenchScreen() {
     });
     const ab = $("#mlautobench");
     if (ab) ab.onclick = () => {
-      mlAutoBench();
+      mlAutoBench("balanced");
       mlSave();
-      toast("★ Bench auto-picked (10 substitutes)");
+      toast("★ Bench auto-picked (balanced)");
+      render(mlBenchScreen);
+    };
+    const abBal = $("#mlautobench_bal");
+    if (abBal) abBal.onclick = () => {
+      mlAutoBench("balanced");
+      mlSave();
+      toast("⚖ Bench auto-picked: Balanced (1 GK + Def/Mid/Fwd)");
+      render(mlBenchScreen);
+    };
+    const abOvr = $("#mlautobench_ovr");
+    if (abOvr) abOvr.onclick = () => {
+      mlAutoBench("ovr");
+      mlSave();
+      toast("★ Bench auto-picked: Highest Rating (Top 10 Reserves)");
       render(mlBenchScreen);
     };
     const bk = $("#mlbback"); if (bk) bk.onclick = () => render(mlPreview);
@@ -1174,7 +1200,11 @@ function mlBenchScreen() {
     <div class="panel">
       <h2>🪑 Match Bench <span class="badge gold" style="float:right">${M.bench.length}/10</span></h2>
       <p class="sub">Pick up to 10 substitutes. Only benched players can come on during the match.</p>
-      <button class="btn gold" id="mlautobench" style="margin-bottom:8px">★ AUTO-PICK BENCH (10)</button>
+      <div class="optrow" style="gap:6px;margin-bottom:8px">
+        <button class="btn secondary" id="mlautobench_bal" style="flex:1;padding:7px 8px;font-size:.72rem">⚖ AUTO (BALANCED)</button>
+        <button class="btn gold" id="mlautobench_ovr" style="flex:1;padding:7px 8px;font-size:.72rem">★ AUTO (HIGHEST OVR)</button>
+      </div>
+      <button id="mlautobench" style="display:none"></button>
       ${nonXI.map(p => `<div class="opt ${M.bench.includes(p.id) ? "sel" : ""}" data-btog="${p.id}" style="font-size:.72rem;margin:3px 0">
         ${M.bench.includes(p.id) ? "✅" : "⬜"} ${mlRpos(p)} ${p.name} · OVR ${p.ovr} · fit ${Math.round(p.fit)}%</div>`).join("") || '<p class="sub">Every fit player is in the XI.</p>'}
       <button class="btn" id="mlbback">DONE ➔</button>
