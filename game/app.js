@@ -3306,6 +3306,20 @@ function newsInboxScreen() {
       (FL_NEWS_CACHE || []).forEach(n => flNewsMark(n.id));
       toast("✅ All marked read"); render(newsInboxScreen);
     };
+    const nrf = $("#topnewsrefresh"); if (nrf) nrf.onclick = () => {
+      FL_NEWS_AT = 0;
+      if (window.Cloud && Cloud.enabled()) {
+        toast("Fetching notices...");
+        Cloud.fetchBroadcasts().then(rows => {
+          FL_NEWS_CACHE = rows || [];
+          toast("✅ Notices updated");
+          render(newsInboxScreen);
+        }).catch(() => toast("Offline: could not fetch notices"));
+      } else {
+        render(newsInboxScreen);
+        toast("Notices refreshed");
+      }
+    };
     $("#newsback").onclick = () => render(menuScreen);
   }, 0);
   const rows = FL_NEWS_CACHE;
@@ -3329,17 +3343,22 @@ function newsInboxScreen() {
   return `<div class="screen">
     <div class="topbar">
       <div class="logo"><span class="brand1">NOTICES &</span> <span class="legend">NEWS</span></div>
-      <span class="badge gold" style="font-size:.72rem">v1.5 (Build 6)</span>
+      <div style="display:flex;align-items:center;gap:6px">
+        <button class="chip" id="topnewsrefresh" style="cursor:pointer;background:var(--panel);border:1px solid var(--line);color:var(--text);display:flex;align-items:center;gap:4px">
+          <span style="font-size:1.05rem">⟳</span>
+          <span class="sub" style="font-size:.72rem">Refresh</span>
+        </button>
+        <span class="badge gold" style="font-size:.72rem">v1.5 (Preview 11)</span>
+      </div>
     </div>
     <div class="panel" style="border:1px solid var(--gold);background:rgba(255,215,94,.05)">
-      <div class="kv"><span style="color:var(--gold);font-weight:800;font-size:.9rem">⚡ WHAT'S NEW IN v1.5 / BUILD 6</span><span class="sub">Latest Patch</span></div>
+      <div class="kv"><span style="color:var(--gold);font-weight:800;font-size:.9rem">⚡ WHAT'S NEW IN LATEST PATCH</span><span class="sub">Preview 11</span></div>
       <ul style="margin:8px 0 0;padding-left:18px;line-height:1.5;font-size:.82rem;color:var(--sub)">
-        <li><b style="color:var(--text)">👻 Ghost PvP:</b> Challenge real players' cloud squads asynchronously with the honest match engine.</li>
-        <li><b style="color:var(--text)">🌐 Global Rankings & Monthly Seasons:</b> Real-time leaderboards with top-3 auto season gifts.</li>
-        <li><b style="color:var(--text)">🛡️ Secure Cloud Saves:</b> Multi-layer backup + server-side anti-cheat save validation.</li>
-        <li><b style="color:var(--text)">📱 Mobile UI Refinements:</b> Optimized card progression, market views, and tactics on narrow phones.</li>
-        <li><b style="color:var(--text)">🎯 Position-Conscious Skills:</b> Goalkeepers and defenders receive position-tailored traits.</li>
-        <li><b style="color:var(--text)">🌱 Academy Regens:</b> 17-year-old youth talents in Master League.</li>
+        <li><b style="color:var(--text)">📥 One-Tap Cloud Restore:</b> Dedicated "Restore Cloud Save" and "Sync to Cloud" buttons in Settings > Account — restoring your career across devices without requiring backup codes.</li>
+        <li><b style="color:var(--text)">🛡️ Intelligent Reinstall Recovery:</b> Automatically detects and offers to restore your existing cloud career on fresh installs and device upgrades.</li>
+        <li><b style="color:var(--text)">⟳ In-Game Screen Refresh:</b> Added instant topbar refresh buttons and reload utilities in Settings and Notices.</li>
+        <li><b style="color:var(--text)">📜 Natural Vertical Scrolling:</b> Enabled smooth vertical overscroll gestures across game menus and career screens.</li>
+        <li><b style="color:var(--text)">👻 Ghost PvP & Global Rankings:</b> Asynchronous real player challenges with monthly seasonal leaderboard rewards.</li>
       </ul>
     </div>
     <div class="panel"><h2>📢 Server Announcements</h2>
