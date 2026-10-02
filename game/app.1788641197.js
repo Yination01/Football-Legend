@@ -3348,17 +3348,16 @@ function newsInboxScreen() {
           <span style="font-size:1.05rem">⟳</span>
           <span class="sub" style="font-size:.72rem">Refresh</span>
         </button>
-        <span class="badge gold" style="font-size:.72rem">v1.5 (Preview 13)</span>
+        <span class="badge gold" style="font-size:.72rem">v1.5 (Preview 14)</span>
       </div>
     </div>
     <div class="panel" style="border:1px solid var(--gold);background:rgba(255,215,94,.05)">
-      <div class="kv"><span style="color:var(--gold);font-weight:800;font-size:.9rem">⚡ WHAT'S NEW IN LATEST PATCH</span><span class="sub">Preview 13</span></div>
+      <div class="kv"><span style="color:var(--gold);font-weight:800;font-size:.9rem">⚡ WHAT'S NEW IN LATEST PATCH</span><span class="sub">Preview 14</span></div>
       <ul style="margin:8px 0 0;padding-left:18px;line-height:1.5;font-size:.82rem;color:var(--sub)">
-        <li><b style="color:var(--text)">🔍 Crystal-Clear Cloud Diagnostics:</b> Settings > Account now displays live cloud save info, and Restore/Sync displays full descriptive details (identifying if no cloud save exists, session expiration, connection errors, or career breakdown).</li>
+        <li><b style="color:var(--text)">🌐 Cloud Sync CORS & Connection Fix:</b> Resolved edge function preflight header mismatch that caused mobile WebViews to fail CORS requests, fixing the false 'Check your internet connection' alert during cloud sync.</li>
+        <li><b style="color:var(--text)">🔍 Crystal-Clear Cloud Diagnostics:</b> Settings > Account displays live cloud save info, and Restore/Sync displays full descriptive details and error tracking.</li>
         <li><b style="color:var(--text)">🔑 Permanent In-Place APK Updates:</b> Fixed keystore signing configuration so all updates install directly over existing versions without uninstallation.</li>
         <li><b style="color:var(--text)">📥 One-Tap Cloud Restore:</b> Dedicated "Restore Cloud Save" and "Sync to Cloud" buttons in Settings > Account.</li>
-        <li><b style="color:var(--text)">⟳ In-Game Screen Refresh:</b> Added instant topbar refresh buttons and reload utilities in Settings and Notices.</li>
-        <li><b style="color:var(--text)">📜 Natural Vertical Scrolling:</b> Enabled smooth vertical overscroll gestures across game menus and career screens.</li>
       </ul>
     </div>
     <div class="panel"><h2>📢 Server Announcements</h2>

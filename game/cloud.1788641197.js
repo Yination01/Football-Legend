@@ -116,11 +116,33 @@ var Cloud = (function () {
     toast("Signed out \u2014 game continues offline");
   }
 
+  function logCloudError(where, err, extra) {
+    try {
+      var logs = JSON.parse(localStorage.getItem("flErrLog") || "[]");
+      logs.push({
+        time: new Date().toISOString(),
+        where: where,
+        message: (err && err.message) || String(err || ""),
+        extra: extra || null
+      });
+      if (logs.length > 50) logs = logs.slice(-50);
+      localStorage.setItem("flErrLog", JSON.stringify(logs));
+    } catch (_) {}
+  }
+
   function ensureSession() {
     if (!sb) return Promise.resolve(session);
     return sb.auth.getSession().then(function (r) {
       if (r && r.data && r.data.session) {
         session = r.data.session;
+        var exp = session.expires_at || 0;
+        var now = Math.floor(Date.now() / 1000);
+        if (exp && exp < now + 120 && sb.auth.refreshSession) {
+          return sb.auth.refreshSession().then(function (ref) {
+            if (ref && ref.data && ref.data.session) session = ref.data.session;
+            return session;
+          }).catch(function () { return session; });
+        }
       }
       return session;
     }).catch(function () {
@@ -131,12 +153,12 @@ var Cloud = (function () {
   function fn(name, body) { // call an edge function with the user's JWT
     return ensureSession().then(function (sess) {
       var token = (sess && sess.access_token) ? sess.access_token : "";
+      if (!token) throw new Error("No active auth token. Please sign out and sign back in.");
       return fetch(FL_CLOUD_URL + "/functions/v1/" + name, {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          authorization: "Bearer " + token,
-          apikey: FL_CLOUD_ANON,
+          "authorization": "Bearer " + token,
         },
         body: JSON.stringify(body),
       }).then(function (r) {
@@ -298,12 +320,12 @@ var Cloud = (function () {
       return false;
     }).catch(function (err) {
       var msg = (err && err.message) || String(err || "");
-      if (msg === "session_expired" || /jwt|unauthenticated|token/i.test(msg)) {
-        alert("🔒 Session Expired\n\nYour Google account authentication has expired.\n\nPlease tap 'SIGN OUT' in Settings > Account, then tap 'SIGN IN WITH GOOGLE' to refresh your session.");
-      } else if (!navigator.onLine || /network|fetch|offline/i.test(msg)) {
-        alert("📡 Connection Error\n\nCould not reach cloud servers. Please check your internet connection and try again.");
+      logCloudError("restoreCloudSave", err);
+      var isOffline = (typeof navigator !== "undefined" && navigator.onLine === false);
+      if (isOffline) {
+        alert("📡 Device Offline\n\nYour device appears to be disconnected from the internet. Please connect and try again.");
       } else {
-        alert("❌ Cloud Restore Error\n\nCould not restore cloud save.\nReason: " + msg + "\n\nPlease check your internet connection or try signing out and signing in again.");
+        alert("❌ Cloud Restore Error\n\nCould not restore cloud save.\n\nServer/Error Details:\n" + msg + "\n\n(Device Internet: Connected)\nIf this persists, try signing out and signing back in.");
       }
       return false;
     });
@@ -339,7 +361,7 @@ var Cloud = (function () {
             return false;
           }
           if (r.status !== 200) {
-            var err = (r.body && r.body.error) || ("HTTP " + r.status);
+            var err = (r.body && r.body.error) || (r.raw ? r.raw.slice(0, 100) : ("HTTP " + r.status));
             alert("❌ Cloud Sync Failed\n\nServer returned: " + err);
             return false;
           }
@@ -355,10 +377,12 @@ var Cloud = (function () {
       });
     }).catch(function (err) {
       var msg = (err && err.message) || String(err || "");
-      if (!navigator.onLine || /network|fetch|offline/i.test(msg)) {
-        alert("📡 Connection Error\n\nCould not reach cloud servers. Please check your internet connection.");
+      logCloudError("syncNow", err);
+      var isOffline = (typeof navigator !== "undefined" && navigator.onLine === false);
+      if (isOffline) {
+        alert("📡 Device Offline\n\nYour device appears to be disconnected from the internet. Please connect and try again.");
       } else {
-        alert("❌ Cloud Sync Failed\n\nError: " + msg);
+        alert("❌ Cloud Sync Failed\n\nCould not upload career to cloud server.\n\nError details:\n" + msg + "\n\n(Device Internet: Connected)\nIf this persists, try signing out and signing in again.");
       }
       return false;
     });
