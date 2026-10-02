@@ -50,10 +50,11 @@ for (let season = 1; season <= 3; season++) {
     const cup = mlCupPending();
     const fx = mlFixtureNow();
     if (!fx) break;
-    const meHome = fx.home === M.clubIdx;
+    const meHome = fx.ct ? fx.ctHome : fx.home === M.clubIdx;
+    const oppClub = fx.ct ? fx.oppClub : M.world.clubs[meHome ? fx.away : fx.home];
     const myEff = mlEffClub();
-    const Hc = meHome ? myEff : M.world.clubs[fx.home];
-    const Ac = meHome ? M.world.clubs[fx.away] : myEff;
+    const Hc = meHome ? myEff : oppClub;
+    const Ac = meHome ? oppClub : myEff;
     const r = E.simulateMatch(Hc, Ac, { seed: E.hashSeed(M.seed + 's' + M.season + 'md' + M.matchday + (cup ? 'cup' : '')), fast: true });
     mlFinish(fx, r, { home: 33, draw: 33, away: 34 });
     check('budget finite', isFinite(M.budget));
@@ -101,5 +102,49 @@ check('league managers deterministic', (() => { const c = M.world.clubs.find(x =
 check('founded club never managed', mlManagerOf(mlClub()) === null);
 check('some clubs AI-managed', M.world.clubs.some(c => !c.founded && mlManagerOf(c)));
 M.seed = _seed;
+
+// ---- v1.5.0 Enhancements: Special Card Tiers, Auto-Bench, Fitness XI, Shop & News ----
+const testRng = E.mulberry32(12345);
+const pShow = { name: "ShowStar", pos: "FW", ovr: 75, pot: 80, skills: [] };
+mlApplySpecialTier(pShow, "showtime", testRng);
+check('showtime tier scales 87-91', pShow.ovr >= 87 && pShow.ovr <= 91 && pShow.pot >= 93 && pShow.skills.length >= 1);
+
+const pBig = { name: "BigStar", pos: "MF", ovr: 75, pot: 80, skills: [] };
+mlApplySpecialTier(pBig, "bigtime", testRng);
+check('bigtime tier scales 89-93', pBig.ovr >= 89 && pBig.ovr <= 93 && pBig.pot >= 95 && pBig.skills.length >= 2);
+
+const pLeg = { name: "LegendStar", pos: "FW", ovr: 75, pot: 80, skills: [] };
+mlApplySpecialTier(pLeg, "legendary", testRng);
+check('legendary tier scales 92-96', pLeg.ovr >= 92 && pLeg.ovr <= 96 && pLeg.pot >= 97 && pLeg.skills.length >= 3);
+
+// Auto-bench picking
+const benchCount = Math.min(10, M.squad.length - M.xi.length);
+const bench10 = mlAutoBench();
+check('auto-bench fills up to 10 subs', bench10.length === benchCount && M.bench.length === benchCount);
+const benchPlayers = M.squad.filter(p => M.bench.includes(p.id));
+check('bench covers multiple positions', benchPlayers.some(p => p.pos === 'DF') && benchPlayers.some(p => p.pos === 'MF'));
+
+// Fitness XI prioritization
+const topFw = M.squad.find(p => p.pos === 'FW');
+if (topFw) {
+  topFw.fit = 30; // severely fatigued
+  mlAutoXI(true); // prioritize fitness
+  const xiNow = mlXIPlayers();
+  check('auto XI by fitness rotates fatigued players out if healthy alternatives exist', xiNow.filter(p => p.fit >= 70).length >= 5);
+}
+
+// UI screens inspection
+const bScreen = mlBenchScreen();
+check('bench screen has autobench button', bScreen.includes('id="mlautobench"'));
+
+const nScreen = mlNewsScreen();
+check('news screen has category filter pills', nScreen.includes('data-newscat="transfers"') && nScreen.includes('data-newscat="matches"'));
+
+const sqScreen = mlSquadScreen();
+check('squad screen has fitness autoxi', sqScreen.includes('id="autoxifit"') && sqScreen.includes('data-sqflt'));
+
+const trScreen = mlTrainScreen(M.squad[0].id);
+check('train screen has auto-train and max-train', trScreen.includes('id="trauto"') && trScreen.includes('id="trmax"'));
+
 console.log(pass + ' ML checks passed, ' + fails.length + ' failed');
 if (fails.length) { console.log(fails.slice(0, 10).join('\n')); process.exit(1); }

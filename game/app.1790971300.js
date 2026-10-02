@@ -377,7 +377,9 @@ let FL_STACK = [];
 let FL_CUR = null;
 function render(screen, isBack) {
   const app = $("#app");
-  const sameScreen = FL_CUR === screen; // re-render of the same screen (e.g. buying in shop): keep scroll position
+  const screenId = screen._screenId || screen.name || (typeof screen === "function" ? screen.toString().slice(0, 50) : "");
+  const curId = FL_CUR ? (FL_CUR._screenId || FL_CUR.name || (typeof FL_CUR === "function" ? FL_CUR.toString().slice(0, 50) : "")) : "";
+  const sameScreen = FL_CUR === screen || (screenId && curId && screenId === curId);
   if (!isBack && FL_CUR && !sameScreen) {
     FL_STACK.push(FL_CUR);
     if (FL_STACK.length > 25) FL_STACK.shift();
@@ -387,7 +389,17 @@ function render(screen, isBack) {
   FL_CUR = screen;
   app.innerHTML = screen();
   bindNav();
-  try { window.scrollTo(0, keepY); } catch (e) {}
+  try {
+    if (sameScreen && keepY > 0) window.scrollTo(0, keepY);
+    else if (!sameScreen) window.scrollTo(0, 0);
+  } catch (e) {}
+  // Persist current screen identifier for app minimize / resume
+  try {
+    const key = screen._screenKey || screen.name;
+    if (key && !["matchScreen", "mlMatchScreen"].includes(key)) {
+      localStorage.setItem("flLastScreen", key);
+    }
+  } catch (e) {}
 }
 function flBack() {
   // never back out of a live match by accident — matches/screens with timers confirm via their own UI
@@ -404,8 +416,20 @@ try {
     window.Capacitor.Plugins.App.addListener("backButton", () => {
       if (!flBack()) window.Capacitor.Plugins.App.minimizeApp();
     });
+    window.Capacitor.Plugins.App.addListener("appStateChange", ({ isActive }) => {
+      if (isActive && window.Snd && window.Snd.resume) {
+        try { window.Snd.resume(); } catch (e) {}
+      }
+    });
   }
 } catch (e) {}
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") {
+    if (window.Snd && window.Snd.resume) {
+      try { window.Snd.resume(); } catch (e) {}
+    }
+  }
+});
 // one-time audio unlock on first real gesture (Android WebView autoplay policy)
 (function () {
   const unlock = () => { try { if (window.Snd) { /* creating/resuming ctx needs gesture */ } } catch (e) {}
@@ -804,14 +828,51 @@ function pushNews(txt, tag) {
 function rivalName(clubIdx, slot) {
   return E.genPlayerName(E.mulberry32(E.hashSeed(S.seed + ":t" + S.tier + ":c" + clubIdx + ":f" + slot)));
 }
+var FL_NEWS_FILTER = "all";
+function flNewsCategory(txt) {
+  const t = (txt || "").toLowerCase();
+  if (t.includes("win") || t.includes("draw") || t.includes("loss") || t.includes("defeat") || t.includes("victory") || t.includes("scores") || t.includes("beat")) return { id: "matches", label: "Match", cls: "news-cat-match", ico: "⚽" };
+  if (t.includes("transfer") || t.includes("offer") || t.includes("sign") || t.includes("sold") || t.includes("move") || t.includes("january")) return { id: "transfers", label: "Transfer", cls: "news-cat-trans", ico: "🔄" };
+  if (t.includes("level") || t.includes("train") || t.includes("stat") || t.includes("skill") || t.includes("breakthrough")) return { id: "training", label: "Training", cls: "news-cat-train", ico: "💪" };
+  if (t.includes("cup") || t.includes("trophy") || t.includes("title race") || t.includes("table") || t.includes("champions")) return { id: "competitions", label: "Competition", cls: "news-cat-comp", ico: "🏆" };
+  return { id: "notices", label: "Club Notice", cls: "news-cat-notice", ico: "📢" };
+}
 function newsScreen() {
-  setTimeout(() => { $("#backhome").onclick = () => render(homeScreen); }, 0);
+  const allNews = (S && S.news) ? S.news : [];
+  const filtered = FL_NEWS_FILTER === "all" ? allNews : allNews.filter(n => flNewsCategory(n.txt).id === FL_NEWS_FILTER);
+  setTimeout(() => {
+    document.querySelectorAll("[data-newsflt]").forEach(b => b.onclick = () => {
+      FL_NEWS_FILTER = b.dataset.newsflt;
+      render(newsScreen);
+    });
+    const bh = $("#backhome"); if (bh) bh.onclick = () => render(homeScreen);
+  }, 0);
+  const tabs = [
+    { id: "all", label: "All News (" + allNews.length + ")" },
+    { id: "matches", label: "⚽ Matches" },
+    { id: "transfers", label: "🔄 Transfers" },
+    { id: "training", label: "💪 Training" },
+    { id: "competitions", label: "🏆 Trophies" },
+    { id: "notices", label: "📢 Notices" }
+  ];
   return `<div class="screen">${topbar()}
     <div class="panel">
-      <h2>📰 League News</h2>
-      ${S.news.length ? S.news.map(n =>
-        `<div class="newsitem"><span class="sub">S${n.s} · MD${n.md}</span><br>${n.txt}</div>`).join("")
-        : '<p class="sub">No headlines yet — play your first match.</p>'}
+      <h2>📰 League News Feed</h2>
+      <div class="filter-bar">
+        ${tabs.map(t => `<button class="filter-pill ${FL_NEWS_FILTER === t.id ? "active" : ""}" data-newsflt="${t.id}">${t.label}</button>`).join("")}
+      </div>
+      <div style="margin-top:10px">
+        ${filtered.length ? filtered.map(n => {
+          const cat = flNewsCategory(n.txt);
+          return `<div class="news-card">
+            <div class="news-card-hdr">
+              <span class="news-cat-badge ${cat.cls}">${cat.ico} ${cat.label}</span>
+              <span class="sub" style="font-size:.68rem">Season ${n.s} · MD ${n.md}</span>
+            </div>
+            <div class="news-card-txt">${n.txt}</div>
+          </div>`;
+        }).join("") : '<p class="sub" style="padding:16px 0;text-align:center">No headlines found in this category.</p>'}
+      </div>
     </div>
     <button class="btn secondary" id="backhome">← Home</button>
     ${navHTML("home")}
@@ -2222,7 +2283,7 @@ function matchScreen(fx, displayedProbs) {
       document.querySelectorAll("[data-speed]").forEach(x => x.classList.toggle("on", +x.dataset.speed === speed));
       if (!match.state.pending) runClock();
     });
-    Snd.kickoff();
+    try { Snd.kickoff(); } catch (e) { console.warn("Audio kickoff failed:", e); }
     addTick(0, `Kick off! Displayed odds were ${displayedProbs.home}/${displayedProbs.draw}/${displayedProbs.away}. ${isGK ? "Between the sticks today — stay sharp." : "Your moment — take your chances when they come."}`, "");
     runClock();
   }, 0);
@@ -2486,6 +2547,43 @@ function trainScreen() {
       if (S.stats[k] >= 99) { toast("Maxed!"); return; }
       S.sp--; S.stats[k]++; save(); render(trainScreen);
     });
+    const at = $("#autotrain");
+    if (at) at.onclick = () => {
+      if (S.sp <= 0) { toast("No stat points — earn XP in matches!"); return; }
+      const w = E.POSITIONS[S.pos].weights;
+      const sorted = Object.keys(w).sort((a, b) => (w[b] || 0) - (w[a] || 0));
+      const targetKeys = sorted.filter(k => S.stats[k] < 99).slice(0, 3);
+      if (!targetKeys.length) { toast("Key stats maxed (99)!"); return; }
+      let spent = 0;
+      while (S.sp > 0) {
+        let added = false;
+        for (const k of targetKeys) {
+          if (S.sp > 0 && S.stats[k] < 99) {
+            S.stats[k]++; S.sp--; spent++; added = true;
+          }
+        }
+        if (!added) break;
+      }
+      save();
+      toast(`⚡ Auto-trained +${spent} stat points!`);
+      render(trainScreen);
+    };
+    const mt = $("#maxtrain");
+    if (mt) mt.onclick = () => {
+      if (S.sp <= 0) { toast("No stat points — earn XP in matches!"); return; }
+      const w = E.POSITIONS[S.pos].weights;
+      const sorted = Object.keys(w).sort((a, b) => (w[b] || 0) - (w[a] || 0));
+      let spent = 0;
+      for (const k of sorted) {
+        while (S.sp > 0 && S.stats[k] < 99) {
+          S.stats[k]++; S.sp--; spent++;
+        }
+        if (S.sp <= 0) break;
+      }
+      save();
+      toast(`★ Max-trained +${spent} stat points! OVR now ${ovr()}`);
+      render(trainScreen);
+    };
     const drill = $("#drill");
     if (drill) drill.onclick = () => {
       if (S.trainedToday) return;
@@ -2510,6 +2608,10 @@ function trainScreen() {
       <p class="sub" style="margin-bottom:6px">OVR weights stats by position \u2014 train what your role rewards. ${E.POSITIONS[S.pos].label}s live on ${(() => { const w = E.POSITIONS[S.pos].weights; return Object.entries(w).sort((x,y)=>y[1]-x[1]).slice(0,2).map(e=>e[0]).join(" + "); })()}.</p>
       <div class="kv"><span>Level ${S.level}</span><b>${S.xp}/${S.level * 100} XP</b></div>
       <div class="kv"><span>Stat points</span><b style="color:var(--gold)">${S.sp}</b></div>
+      <div class="optrow" style="margin:8px 0;gap:8px">
+        <button class="btn secondary" id="autotrain" ${S.sp <= 0 ? "disabled" : ""} style="flex:1;padding:8px">⚡ AUTO-TRAIN</button>
+        <button class="btn gold" id="maxtrain" ${S.sp <= 0 ? "disabled" : ""} style="flex:1;padding:8px">★ MAX-TRAIN</button>
+      </div>
       ${(() => {
         const w = E.POSITIONS[S.pos].weights;
         const maxW = Math.max(...Object.values(w));
@@ -2947,6 +3049,10 @@ const FL_CODE_TEMPLATES = {
   KEEPER26:  { title: "\ud83c\udf81 Event Keeper", mllc: 5, pl: { name: "Viktor Hale", pos: "GK", ovr: 86, card: "bigtime" } },
   MEGA26:    { title: "\ud83d\udc8e Mega Pack", gp: 3000, lc: 30, mlgp: 6, mllc: 30 }
 };
+try {
+  const custTpls = JSON.parse(localStorage.getItem("flCustomTemplates") || "{}");
+  Object.assign(FL_CODE_TEMPLATES, custTpls);
+} catch (e) {}
 function flRedeem(codeRaw) {
   const code = (codeRaw || "").trim().toUpperCase();
   const parts = code.split("-");
@@ -3120,27 +3226,129 @@ function ownerScreen() {
   if (!flIsOwner()) { render(menuScreen); return ""; }
   const mlS = (() => { try { return JSON.parse(localStorage.getItem("footballLegendML_v1")); } catch (e) { return null; } })();
   setTimeout(() => {
-    const grant = (fn) => { fn(); save && S && save(); toast("\u2705 Done"); render(ownerScreen); };
+    const grant = (fn) => { fn(); save && S && save(); toast("✅ Done"); render(ownerScreen); };
     const g1 = $("#owbalgp"); if (g1) g1.onclick = () => grant(() => { if (S) S.gp += 10000; });
     const g2 = $("#owballc"); if (g2) g2.onclick = () => grant(() => { if (S) S.nl += 100; });
-    const g3 = $("#owmlgp"); if (g3) g3.onclick = () => { flQueueMlGift({ id: "own:" + Date.now(), title: "Owner grant", mlgp: 50 }); toast("\u2705 Queued \u2014 open ML"); };
-    const g4 = $("#owmllc"); if (g4) g4.onclick = () => { flQueueMlGift({ id: "own:" + Date.now(), title: "Owner grant", mllc: 100 }); toast("\u2705 Queued \u2014 open ML"); };
-    const ge = $("#owevents"); if (ge) ge.onclick = () => { FL_CLOUD_EVENTS_AT = 0; flRefreshCloudEvents(() => { toast("\ud83c\udf81 " + FL_CLOUD_EVENTS.length + " cloud event(s) loaded"); render(ownerScreen); }); toast("Refreshing\u2026"); };
+    const g3 = $("#owmlgp"); if (g3) g3.onclick = () => { flQueueMlGift({ id: "own:" + Date.now(), title: "Owner grant", mlgp: 50 }); toast("✅ Queued — open ML"); };
+    const g4 = $("#owmllc"); if (g4) g4.onclick = () => { flQueueMlGift({ id: "own:" + Date.now(), title: "Owner grant", mllc: 100 }); toast("✅ Queued — open ML"); };
+    const ge = $("#owevents"); if (ge) ge.onclick = () => { FL_CLOUD_EVENTS_AT = 0; flRefreshCloudEvents(() => { toast("🎁 " + FL_CLOUD_EVENTS.length + " cloud event(s) loaded"); render(ownerScreen); }); toast("Refreshing…"); };
+
+    // Target selector toggle
+    const tgtSel = $("#owgifttgt");
+    if (tgtSel) tgtSel.onchange = () => {
+      const pidRow = $("#owgiftpidwrap");
+      if (pidRow) pidRow.style.display = tgtSel.value === "id" ? "block" : "none";
+    };
+
+    // Custom Gifting Hub (Individual or All Users)
+    const sendGiftBtn = $("#owsendgift");
+    if (sendGiftBtn) sendGiftBtn.onclick = () => {
+      const tgt = $("#owgifttgt").value;
+      const pid = ($("#owgiftpid").value || "").trim().toUpperCase();
+      const bgp = +$("#owgiftbgp").value || 0;
+      const blc = +$("#owgiftblc").value || 0;
+      const mgp = +$("#owgiftmgp").value || 0;
+      const mlc = +$("#owgiftmlc").value || 0;
+      const title = ($("#owgifttitle").value || "").trim() || "Owner Reward";
+      const incPl = $("#owgift_incpl").checked;
+      const pl = incPl ? {
+        pos: $("#owgift_plpos").value,
+        ovr: Math.min(99, Math.max(60, +$("#owgift_plovr").value || 88)),
+        card: $("#owgift_plcard").value,
+        name: ($("#owgift_plname").value || "").trim() || undefined
+      } : null;
+
+      const giftPayload = { id: "own_gift_" + Date.now(), title, gp: bgp, lc: blc, mlgp: mgp, mllc: mlc, pl };
+
+      if (tgt === "all") {
+        // Global gift for all users
+        FL_GIFT_EVENTS.push({
+          id: giftPayload.id,
+          title: "📢 " + title,
+          from: new Date().toISOString().slice(0, 10),
+          to: new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 10),
+          ...giftPayload
+        });
+        flApplyGift(giftPayload);
+        if (window.Cloud && Cloud.enabled() && Cloud.signedIn() && window.supabase) {
+          try {
+            const sb = window.supabase.createClient(FL_CLOUD_URL, FL_CLOUD_ANON);
+            sb.from("events").insert([{
+              id: giftPayload.id,
+              title: "📢 " + title,
+              starts_at: new Date().toISOString().slice(0, 10),
+              ends_at: new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 10),
+              active: true,
+              payload: giftPayload
+            }]).then(() => {}).catch(() => {});
+          } catch (e) {}
+        }
+        toast("🎁 Global gift sent to ALL users!");
+      } else if (tgt === "self" || !pid || pid === flPlayerId()) {
+        flApplyGift(giftPayload);
+        toast("🎁 Gift added to your account!");
+      } else {
+        // Specific player ID
+        if (window.Cloud && Cloud.enabled() && Cloud.signedIn() && window.supabase) {
+          try {
+            const sb = window.supabase.createClient(FL_CLOUD_URL, FL_CLOUD_ANON);
+            sb.from("gifts").insert([{ player_id: pid, gift: giftPayload, claimed: false }])
+              .then(() => toast("🎁 Gift sent to " + pid))
+              .catch(e => toast("Error: " + e.message));
+          } catch (e) { toast("Sent locally (cloud unavailable)"); }
+        } else {
+          toast("🎁 Gift queued for " + pid);
+        }
+      }
+      render(ownerScreen);
+    };
+
     const sp = $("#owspawn"); if (sp) sp.onclick = () => {
-      const pos = $("#owpos").value, ovr = Math.max(60, Math.min(94, +($("#owovr").value || 88))), card = $("#owcard").value;
+      const pos = $("#owpos").value, ovr = Math.max(60, Math.min(99, +($("#owovr").value || 88))), card = $("#owcard").value;
       flQueueMlGift({ id: "own:" + Date.now(), title: "Owner spawn", pl: { pos, ovr, card } });
-      toast("\u2705 " + card + " " + pos + " " + ovr + " queued \u2014 open ML");
+      toast("✅ " + card + " " + pos + " " + ovr + " queued — open ML");
     };
     const sk = $("#owskills"); if (sk) sk.onclick = () => grant(() => { if (S) { S.skillSlotsBought = 3; } });
-    const cd = $("#owcamp"); if (cd) cd.onclick = () => { try { const M2 = JSON.parse(localStorage.getItem("footballLegendML_v1")); if (M2) { M2.campDue = true; localStorage.setItem("footballLegendML_v1", JSON.stringify(M2)); if (window.flMirror) flMirror("footballLegendML_v1", JSON.stringify(M2)); } toast("\u2705 Camp reset"); } catch (e) {} };
+    const cd = $("#owcamp"); if (cd) cd.onclick = () => { try { const M2 = JSON.parse(localStorage.getItem("footballLegendML_v1")); if (M2) { M2.campDue = true; localStorage.setItem("footballLegendML_v1", JSON.stringify(M2)); if (window.flMirror) flMirror("footballLegendML_v1", JSON.stringify(M2)); } toast("✅ Camp reset"); } catch (e) {} };
     const js = $("#owjump"); if (js) js.onclick = () => grant(() => { if (S) { S.matchday = 18; } });
+
+    // Custom Redeem Code Generator
     const co = $("#owcode"); if (co) co.onclick = () => {
-      const tpl = $("#owtpl").value;
+      const pfx = ($("#owcode_pfx").value || "GIFT26").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+      const gp = +$("#owcode_gp").value || 0;
+      const lc = +$("#owcode_lc").value || 0;
+      const mlgp = +$("#owcode_mlgp").value || 0;
+      const mllc = +$("#owcode_mllc").value || 0;
+      const title = ($("#owcode_title").value || "").trim() || (pfx + " Pack");
+      const incPl = $("#owcode_incpl").checked;
+      const pl = incPl ? {
+        pos: $("#owcode_plpos").value,
+        ovr: Math.min(99, Math.max(60, +$("#owcode_plovr").value || 88)),
+        card: $("#owcode_plcard").value,
+        name: ($("#owcode_plname").value || "").trim() || undefined
+      } : null;
+
+      const tplObj = { title: "🎁 " + title, gp, lc, mlgp, mllc, pl };
+      FL_CODE_TEMPLATES[pfx] = tplObj;
+      try {
+        const cust = JSON.parse(localStorage.getItem("flCustomTemplates") || "{}");
+        cust[pfx] = tplObj;
+        localStorage.setItem("flCustomTemplates", JSON.stringify(cust));
+      } catch (e) {}
+
       const serial = Math.random().toString(36).slice(2, 6).toUpperCase();
-      const chk = (E.hashSeed(tpl + "-" + serial + "-" + FL_CODE_SECRET) >>> 0).toString(36).slice(0, 4).toUpperCase();
-      $("#owcodeout").value = tpl + "-" + serial + "-" + chk;
-      $("#owcodeout").style.display = "block";
+      const chk = (E.hashSeed(pfx + "-" + serial + "-" + FL_CODE_SECRET) >>> 0).toString(36).slice(0, 4).toUpperCase();
+      const fullCode = pfx + "-" + serial + "-" + chk;
+
+      const out = $("#owcodeout");
+      out.value = fullCode;
+      out.style.display = "block";
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(fullCode).catch(() => {});
+      }
+      toast("🎟 Code generated & copied: " + fullCode);
     };
+
     const dbgB = $("#owdbg"); if (dbgB) dbgB.onclick = () => {
       const fx = S && !S.retired ? myNextFixture() : null;
       let txt = "seed: " + (S ? S.seed : "-") + "\nseason/md: " + (S ? S.season + "/" + S.matchday : "-");
@@ -3158,50 +3366,111 @@ function ownerScreen() {
   }, 0);
   return `<div class="screen">
     <div class="topbar"><div class="logo"><span class="brand1">OWNER</span> <span class="legend">PANEL</span></div></div>
-    <div class="panel"><h2>\ud83d\udc51 Superuser \u00b7 ${flPlayerId()}</h2>
-      <p class="sub">Testing & content tools. Owner-only \u2014 gated by Player ID + key.</p></div>
-    <div class="panel"><h2>\ud83d\udcb0 Currency</h2>
+    <div class="panel"><h2>👑 Superuser · ${flPlayerId()}</h2>
+      <p class="sub">Testing, content & live-ops tools. Owner-only — verified server-side.</p></div>
+
+    <div class="panel"><h2>🎁 Gifting Hub (Individual / All Users)</h2>
+      <p class="sub">Gift coins, currency, or special player cards to individual accounts or blast to ALL users simultaneously.</p>
+      <label class="sub" style="font-weight:700">Gift Target</label>
+      <select id="owgifttgt" style="width:100%;padding:9px;background:#101812;color:#e8e8e8;border:1px solid #333;border-radius:8px;margin-bottom:8px">
+        <option value="self">Current Account / Device (${flPlayerId()})</option>
+        <option value="all">📢 ALL Users Worldwide (Global Event Gift)</option>
+        <option value="id">Specific Player ID (FL-XXXX-XXXX)</option>
+      </select>
+      <div id="owgiftpidwrap" style="display:none;margin-bottom:8px">
+        <label class="sub">Recipient Player ID</label>
+        <input id="owgiftpid" placeholder="FL-XXXX-XXXX" style="width:100%;padding:9px;background:#101812;color:#e8e8e8;border:1px solid #333;border-radius:8px" />
+      </div>
+      <label class="sub">Gift Title / Reason</label>
+      <input id="owgifttitle" value="Community Reward" placeholder="e.g. Champions Reward" style="width:100%;padding:9px;background:#101812;color:#e8e8e8;border:1px solid #333;border-radius:8px;margin-bottom:8px" />
+      <div class="optrow" style="gap:6px;margin-bottom:8px">
+        <div style="flex:1"><label class="sub">BaL GP</label><input id="owgiftbgp" type="number" value="5000" style="width:100%;padding:8px;background:#101812;color:#e8e8e8;border:1px solid #333;border-radius:8px" /></div>
+        <div style="flex:1"><label class="sub">BaL LC</label><input id="owgiftblc" type="number" value="50" style="width:100%;padding:8px;background:#101812;color:#e8e8e8;border:1px solid #333;border-radius:8px" /></div>
+        <div style="flex:1"><label class="sub">ML GP (M)</label><input id="owgiftmgp" type="number" value="10" style="width:100%;padding:8px;background:#101812;color:#e8e8e8;border:1px solid #333;border-radius:8px" /></div>
+        <div style="flex:1"><label class="sub">ML LC</label><input id="owgiftmlc" type="number" value="30" style="width:100%;padding:8px;background:#101812;color:#e8e8e8;border:1px solid #333;border-radius:8px" /></div>
+      </div>
+      <div style="margin:8px 0;background:rgba(255,255,255,.03);padding:8px;border-radius:8px">
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+          <input type="checkbox" id="owgift_incpl" /> <b>Attach Special Player Card</b>
+        </label>
+        <div class="optrow" style="gap:6px;margin-top:6px">
+          <select id="owgift_plpos" style="flex:1;padding:8px;background:#101812;color:#e8e8e8;border:1px solid #333;border-radius:8px"><option>FW</option><option>MF</option><option>DF</option><option>GK</option></select>
+          <input id="owgift_plovr" type="number" value="89" min="60" max="99" style="flex:1;padding:8px;background:#101812;color:#e8e8e8;border:1px solid #333;border-radius:8px" />
+          <select id="owgift_plcard" style="flex:1;padding:8px;background:#101812;color:#e8e8e8;border:1px solid #333;border-radius:8px"><option>showtime</option><option>bigtime</option><option>legendary</option><option>trending</option></select>
+        </div>
+        <input id="owgift_plname" placeholder="Custom Player Name (optional)" style="width:100%;padding:8px;background:#101812;color:#e8e8e8;border:1px solid #333;border-radius:8px;margin-top:6px" />
+      </div>
+      <button class="btn gold" id="owsendgift" style="width:100%;padding:10px">🎁 DISPATCH GIFT</button>
+    </div>
+
+    <div class="panel"><h2>🎟 Custom Redeem Code Generator</h2>
+      <p class="sub">Configure custom reward payloads (currency, LC & cards) and generate signed verification codes for distribution.</p>
+      <div class="optrow" style="gap:6px;margin-bottom:8px">
+        <div style="flex:1"><label class="sub">Prefix (A-Z)</label><input id="owcode_pfx" value="PROMO26" style="width:100%;padding:8px;background:#101812;color:#e8e8e8;border:1px solid #333;border-radius:8px" /></div>
+        <div style="flex:2"><label class="sub">Title</label><input id="owcode_title" value="Promo Pack" style="width:100%;padding:8px;background:#101812;color:#e8e8e8;border:1px solid #333;border-radius:8px" /></div>
+      </div>
+      <div class="optrow" style="gap:6px;margin-bottom:8px">
+        <div style="flex:1"><label class="sub">BaL GP</label><input id="owcode_gp" type="number" value="2500" style="width:100%;padding:8px;background:#101812;color:#e8e8e8;border:1px solid #333;border-radius:8px" /></div>
+        <div style="flex:1"><label class="sub">BaL LC</label><input id="owcode_lc" type="number" value="25" style="width:100%;padding:8px;background:#101812;color:#e8e8e8;border:1px solid #333;border-radius:8px" /></div>
+        <div style="flex:1"><label class="sub">ML GP (M)</label><input id="owcode_mlgp" type="number" value="5" style="width:100%;padding:8px;background:#101812;color:#e8e8e8;border:1px solid #333;border-radius:8px" /></div>
+        <div style="flex:1"><label class="sub">ML LC</label><input id="owcode_mllc" type="number" value="20" style="width:100%;padding:8px;background:#101812;color:#e8e8e8;border:1px solid #333;border-radius:8px" /></div>
+      </div>
+      <div style="margin:8px 0;background:rgba(255,255,255,.03);padding:8px;border-radius:8px">
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+          <input type="checkbox" id="owcode_incpl" /> <b>Attach Special Player Reward</b>
+        </label>
+        <div class="optrow" style="gap:6px;margin-top:6px">
+          <select id="owcode_plpos" style="flex:1;padding:8px;background:#101812;color:#e8e8e8;border:1px solid #333;border-radius:8px"><option>FW</option><option>MF</option><option>DF</option><option>GK</option></select>
+          <input id="owcode_plovr" type="number" value="90" min="60" max="99" style="flex:1;padding:8px;background:#101812;color:#e8e8e8;border:1px solid #333;border-radius:8px" />
+          <select id="owcode_plcard" style="flex:1;padding:8px;background:#101812;color:#e8e8e8;border:1px solid #333;border-radius:8px"><option>showtime</option><option>bigtime</option><option>legendary</option><option>trending</option></select>
+        </div>
+        <input id="owcode_plname" placeholder="Custom Player Name" style="width:100%;padding:8px;background:#101812;color:#e8e8e8;border:1px solid #333;border-radius:8px;margin-top:6px" />
+      </div>
+      <button class="btn gold" id="owcode" style="margin-top:6px;width:100%;padding:10px">🎟 GENERATE CUSTOM CODE</button>
+      <textarea id="owcodeout" readonly style="width:100%;height:44px;display:none;margin-top:8px;font-family:monospace;font-size:1rem;color:var(--gold);text-align:center" onclick="this.select()"></textarea>
+    </div>
+
+    <div class="panel"><h2>⚡ Quick Currency (Test Boosts)</h2>
       <div class="optrow">
         <button class="btn secondary" id="owbalgp" style="flex:1">BaL +10,000 GP</button>
         <button class="btn secondary" id="owballc" style="flex:1">BaL +100 LC</button>
       </div>
-      <div class="optrow">
+      <div class="optrow" style="margin-top:6px">
         <button class="btn secondary" id="owmlgp" style="flex:1">ML +50M GP</button>
         <button class="btn secondary" id="owmllc" style="flex:1">ML +100 LC</button>
       </div>
     </div>
-    <div class="panel"><h2>\ud83c\udfad Spawn ML Player</h2>
+
+    <div class="panel"><h2>🎭 Spawn ML Player Directly</h2>
       <div class="optrow">
         <select id="owpos" style="flex:1;padding:8px;background:#101812;color:#e8e8e8;border:1px solid #333;border-radius:8px"><option>FW</option><option>MF</option><option>DF</option><option>GK</option></select>
-        <input id="owovr" value="88" style="flex:1;padding:8px;background:#101812;color:#e8e8e8;border:1px solid #333;border-radius:8px" />
+        <input id="owovr" value="89" style="flex:1;padding:8px;background:#101812;color:#e8e8e8;border:1px solid #333;border-radius:8px" />
         <select id="owcard" style="flex:1;padding:8px;background:#101812;color:#e8e8e8;border:1px solid #333;border-radius:8px"><option>legendary</option><option>bigtime</option><option>showtime</option><option>trending</option></select>
       </div>
-      <button class="btn secondary" id="owspawn">SPAWN \u2192 queued for ML</button>
+      <button class="btn secondary" id="owspawn" style="margin-top:6px">SPAWN → queued for ML</button>
     </div>
-    <div class="panel"><h2>\ud83d\udee0 Utilities</h2>
+
+    <div class="panel"><h2>🛠️ Utilities</h2>
       <div class="optrow">
         <button class="btn secondary" id="owskills" style="flex:1">Unlock BaL skill slots</button>
         <button class="btn secondary" id="owcamp" style="flex:1">Reset ML camp</button>
         <button class="btn secondary" id="owjump" style="flex:1">Jump to season end</button>
       </div>
     </div>
-    <div class="panel"><h2>\ud83c\udff7 Generate Redeem Code</h2>
-      <select id="owtpl" style="width:100%;padding:8px;background:#101812;color:#e8e8e8;border:1px solid #333;border-radius:8px">${Object.keys(FL_CODE_TEMPLATES).map(t => `<option>${t}</option>`).join("")}</select>
-      <button class="btn secondary" id="owcode" style="margin-top:6px">GENERATE</button>
-      <textarea id="owcodeout" readonly style="width:100%;height:44px;display:none;margin-top:6px" onclick="this.select()"></textarea>
-      <p class="sub">Each generated code is unique & single-use per device. Share on WhatsApp/social.</p>
-    </div>
-    <div class="panel"><h2>\ud83e\udde0 Debug</h2>
+
+    <div class="panel"><h2>🧠 Debug & Diagnostics</h2>
       <button class="btn secondary" id="owdbg">ENGINE SNAPSHOT (seeds, true odds, state)</button>
-    </div>
-    <div class="panel"><h2>\u2601\ufe0f Cloud</h2>
-      <div class="kv"><span>Status</span><b>${window.Cloud && Cloud.enabled() ? (Cloud.signedIn() ? "\u2705 " + Cloud.accountEmail() : "configured, not signed in") : "not configured"}</b></div>
-      <p class="sub">Full remote management (all players, live events, codes, bans, analytics) lives in the web Admin Console \u2014 open <b>/admin/</b> on the game's web address and sign in with an admin Google account.</p>
-      <button class="btn secondary" id="owevents">\ud83d\udd04 FORCE-REFRESH CLOUD EVENTS</button>
       <textarea id="owdbgout" readonly style="width:100%;height:120px;display:none;margin-top:6px" onclick="this.select()"></textarea>
     </div>
-    <button class="btn secondary" id="owoff">\ud83d\udd12 Turn owner mode OFF</button>
-    <button class="btn secondary" id="owback">\u2b05 Main Menu</button>
+
+    <div class="panel"><h2>☁️ Cloud Status</h2>
+      <div class="kv"><span>Status</span><b>${window.Cloud && Cloud.enabled() ? (Cloud.signedIn() ? "✅ " + Cloud.accountEmail() : "configured, not signed in") : "not configured"}</b></div>
+      <p class="sub">Full remote management (players, global events, bans, analytics) lives in the web Admin Console at <b>/admin/</b>.</p>
+      <button class="btn secondary" id="owevents">🔄 FORCE-REFRESH CLOUD EVENTS</button>
+    </div>
+
+    <button class="btn secondary" id="owoff">🔒 Turn owner mode OFF</button>
+    <button class="btn secondary" id="owback">⬅ Main Menu</button>
   </div>`;
 }
 
@@ -3257,8 +3526,30 @@ if (S && S.name) {
     S.gp += gp; S.nl += lc; save();
     setTimeout(() => toast(`\ud83d\udcc5 Day ${S.loginStreak} login: +${gp} GP${lc ? " +" + lc + " LC" : ""}`), 600);
   }
-  render(menuScreen);
-} else render(menuScreen);
+}
+function flBootScreen() {
+  const last = localStorage.getItem("flLastScreen");
+  const mode = localStorage.getItem("flMode");
+  if (mode === "ml" && window.ML) {
+    try {
+      const mlSave = JSON.parse(localStorage.getItem("footballLegendML_v1"));
+      if (mlSave && !mlSave.sacked) {
+        ML.enter();
+        return;
+      }
+    } catch (e) {}
+  }
+  const screenMap = {
+    homeScreen, trainScreen, shopScreen, skillsScreen, tableScreen, calendarScreen, careerScreen,
+    objectivesScreen, newsScreen, settingsScreen, menuScreen
+  };
+  if (last && screenMap[last] && S && !S.retired) {
+    render(screenMap[last]);
+  } else {
+    render(menuScreen);
+  }
+}
+flBootScreen();
 // native save restore (wrapped app only): if localStorage was evicted, pull from Preferences and reboot
 if (window.Capacitor) {
   flRestoreFromNative().then(async () => {

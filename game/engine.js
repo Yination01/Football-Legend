@@ -267,7 +267,8 @@ function createMatch(home, away, opts) {
   const pTeam = o.playerTeam; // 0 home, 1 away, null
   const posInfo = P ? POSITIONS[P.pos] : null;
 
-  let strH = home.str + 4, strA = away.str;
+  let strH = (home && home.str != null) ? home.str + 4 : 65;
+  let strA = (away && away.str != null) ? away.str : 65;
   let powH = Math.pow(strH, 1.7), powA = Math.pow(strA, 1.7);
   let shareH = powH / (powH + powA);
   function setStrengths(hs, as) { // ML: mid-match tactics — absolute strengths incl. any home adv

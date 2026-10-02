@@ -118,11 +118,31 @@ function mlMode(on) { localStorage.setItem("flMode", on ? "ml" : "bal"); }
 const ML_BUCKET_POS = { GK: ["GK"], DF: ["CB", "CB", "LB", "RB"], MF: ["DMF", "CMF", "CMF", "AMF"], FW: ["CF", "SS", "LWF", "RWF"] };
 function mlGenPlayer(rng, region, bucket, ovr) {
   const age = 18 + Math.floor(rng() * 17);
-  const pot = Math.min(94, ovr + (age < 22 ? 6 + Math.floor(rng() * 8) : age < 27 ? 2 + Math.floor(rng() * 5) : 0));
+  const pot = Math.min(99, Math.max(ovr + 3, ovr + (age < 23 ? 8 + Math.floor(rng() * 8) : age < 28 ? 4 + Math.floor(rng() * 5) : 3)));
   const opts = ML_BUCKET_POS[bucket];
   const rpos = opts[Math.floor(rng() * opts.length)];
   return { id: Math.floor(rng() * 1e9), name: E.genPlayerName(rng, region), pos: bucket, rpos, age, ovr, pot,
            fit: 100, value: mlValue(ovr, age), wage: Math.round(4 + Math.pow(Math.max(0, ovr - 50), 1.6) * 0.55), card: null };
+}
+function mlApplySpecialTier(p, cardId, rng) {
+  p.cardId = cardId;
+  p.card = (ML_CARDS[cardId] && ML_CARDS[cardId].label) || cardId.toUpperCase();
+  if (cardId === "trending") {
+    p.ovr = Math.max(p.ovr, 83 + Math.floor(rng() * 5));
+    p.pot = Math.max(p.pot, Math.min(94, p.ovr + 4 + Math.floor(rng() * 4)));
+  } else if (cardId === "showtime") {
+    p.ovr = Math.max(p.ovr, 87 + Math.floor(rng() * 5));
+    p.pot = Math.max(p.pot, Math.min(97, p.ovr + 4 + Math.floor(rng() * 4)));
+  } else if (cardId === "bigtime") {
+    p.ovr = Math.max(p.ovr, 89 + Math.floor(rng() * 5));
+    p.pot = Math.max(p.pot, Math.min(98, p.ovr + 4 + Math.floor(rng() * 4)));
+  } else if (cardId === "legendary") {
+    p.ovr = Math.max(p.ovr, 92 + Math.floor(rng() * 5));
+    p.pot = Math.max(p.pot, Math.min(99, p.ovr + 3 + Math.floor(rng() * 4)));
+  }
+  mlGiveSkills(p, rng);
+  p.value = mlValue(p.ovr, p.age) * (cardId === "legendary" ? 1.6 : 1.3);
+  p.wage = Math.round(4 + Math.pow(Math.max(0, p.ovr - 50), 1.6) * 0.55);
 }
 function mlRpos(p) { return p.rpos || (ML_BUCKET_POS[p.pos] ? ML_BUCKET_POS[p.pos][0] : p.pos); }
 // eFootball-style trainer cards: EXP material earned from matches/events, bought in shop, or converted from surplus players
@@ -139,6 +159,17 @@ function mlEnsureTrainers() {
   for (const p of M.squad) {
     p.exp = p.exp || 0;
     if (!p.rpos) { const o = ML_BUCKET_POS[p.pos] || ["CMF"]; p.rpos = o[Math.floor(mig() * o.length)]; }
+    if (p.cardId) {
+      if (p.cardId === "showtime" && (p.ovr < 86 || p.pot <= 80)) {
+        p.ovr = Math.max(p.ovr, 88); p.pot = Math.max(p.pot, 94); p.value = mlValue(p.ovr, p.age) * 1.3;
+      } else if (p.cardId === "bigtime" && (p.ovr < 88 || p.pot <= 82)) {
+        p.ovr = Math.max(p.ovr, 90); p.pot = Math.max(p.pot, 96); p.value = mlValue(p.ovr, p.age) * 1.3;
+      } else if (p.cardId === "legendary" && (p.ovr < 90 || p.pot <= 85)) {
+        p.ovr = Math.max(p.ovr, 93); p.pot = Math.max(p.pot, 98); p.value = mlValue(p.ovr, p.age) * 1.6;
+      } else if (p.cardId === "trending" && (p.ovr < 82 || p.pot <= 78)) {
+        p.ovr = Math.max(p.ovr, 84); p.pot = Math.max(p.pot, 91); p.value = mlValue(p.ovr, p.age) * 1.3;
+      }
+    }
   }
 }
 function mlValue(ovr, age) {
@@ -200,20 +231,42 @@ function mlDriftForm() { // called once per matchday result
     if (p.cardId === "legendary" && p.form < 0) p.form = 0; // ability: form floor
   }
 }
-function mlAutoXI() {
+function mlAutoXI(byFitness) {
   const need = ML_FORMS[M.formation];
   const xi = [];
+  const score = (p) => {
+    if (byFitness) {
+      const fitBonus = p.fit >= 70 ? 200 : (p.fit >= 40 ? 50 : 0);
+      return fitBonus + effOvr(p);
+    }
+    return effOvr(p);
+  };
   for (const bucket of ["GK", "DF", "MF", "FW"]) {
     const pool = M.squad.filter(p => p.pos === bucket && !xi.includes(p.id))
-      .sort((a, b) => effOvr(b) - effOvr(a));
+      .sort((a, b) => score(b) - score(a));
     for (let i = 0; i < need[bucket] && i < pool.length; i++) xi.push(pool[i].id);
   }
   // enforce a full XI: fill outfield shortfalls with best remaining outfielders (out of position)
   if (xi.length < 11) {
-    const rest = M.squad.filter(p => !xi.includes(p.id) && p.pos !== "GK").sort((a, b) => effOvr(b) - effOvr(a));
+    const rest = M.squad.filter(p => !xi.includes(p.id) && p.pos !== "GK").sort((a, b) => score(b) - score(a));
     while (xi.length < 11 && rest.length) xi.push(rest.shift().id);
   }
   M.xi = xi;
+}
+function mlAutoBench() {
+  const nonXI = M.squad.filter(p => !M.xi.includes(p.id));
+  const bench = [];
+  const gk = nonXI.filter(p => p.pos === "GK").sort((a, b) => (b.fit * 0.3 + b.ovr) - (a.fit * 0.3 + a.ovr))[0];
+  if (gk) bench.push(gk.id);
+  const sorted = nonXI.filter(p => !bench.includes(p.id))
+    .sort((a, b) => (effOvr(b) * 0.6 + b.fit * 0.4) - (effOvr(a) * 0.6 + a.fit * 0.4));
+  for (const p of sorted) {
+    if (bench.length >= 10) break;
+    bench.push(p.id);
+  }
+  M.bench = bench;
+  mlSave();
+  return M.bench;
 }
 function mlXIValid() { // hard rule: 11 players INCLUDING exactly >=1 GK
   const ps = mlXIPlayers();
@@ -453,6 +506,8 @@ function mlCreate() {
 }
 
 // ---------- squad ----------
+var ML_SQ_FLT = "all";
+var ML_SQ_SORT = "ovr";
 function mlSquadScreen() {
   mlEnsureTrainers();
   setTimeout(() => {
@@ -470,7 +525,19 @@ function mlSquadScreen() {
       mlAutoXI(); mlNews("SOLD: " + p.name + " (" + fmtM(fee) + ")"); mlSave();
       render(mlSquadScreen);
     });
-    const ax = $("#autoxi"); if (ax) ax.onclick = () => { mlAutoXI(); mlSave(); render(mlSquadScreen); toast("Best XI picked"); };
+    const ax = $("#autoxi"); if (ax) ax.onclick = () => { mlAutoXI(false); mlSave(); render(mlSquadScreen); toast("★ Best XI picked"); };
+    const axFit = $("#autoxifit"); if (axFit) axFit.onclick = () => { mlAutoXI(true); mlSave(); render(mlSquadScreen); toast("⚡ Best XI picked (prioritizing high fitness)"); };
+    
+    document.querySelectorAll("[data-sqflt]").forEach(b => b.onclick = () => {
+      ML_SQ_FLT = b.dataset.sqflt;
+      render(mlSquadScreen);
+    });
+    const sortSel = $("#sqsortsel");
+    if (sortSel) sortSel.onchange = () => {
+      ML_SQ_SORT = sortSel.value;
+      render(mlSquadScreen);
+    };
+
     document.querySelectorAll("[data-trainp]").forEach(b => b.onclick = (ev) => {
       ev.stopPropagation();
       const p = M.squad.find(x => x.id === +b.dataset.trainp);
@@ -486,7 +553,7 @@ function mlSquadScreen() {
       M.squad = M.squad.filter(x => x.id !== p.id);
       M.trainers[tier]++;
       M._sqOpen = null;
-      mlNews("CONVERTED: " + p.name + " \u2192 " + ML_TRAINERS[tier].label);
+      mlNews("CONVERTED: " + p.name + " → " + ML_TRAINERS[tier].label);
       mlAutoXI(); mlSave(); render(mlSquadScreen);
     });
     document.querySelectorAll("[data-sqrow]").forEach(b => b.onclick = () => {
@@ -497,34 +564,88 @@ function mlSquadScreen() {
   }, 0);
   const openId = M._sqOpen || null;
   const fitBar = (p) => `<span class="fitbar"><i style="width:${Math.round(p.fit)}%;background:${p.fit > 70 ? "var(--green)" : p.fit > 40 ? "var(--gold)" : "var(--red)"}"></i></span>`;
+  
+  // Filter squad
+  let filteredSquad = M.squad.filter(p => {
+    if (ML_SQ_FLT === "all") return true;
+    if (["GK", "DF", "MF", "FW"].includes(ML_SQ_FLT)) return p.pos === ML_SQ_FLT;
+    if (ML_SQ_FLT === "xi") return M.xi.includes(p.id);
+    if (ML_SQ_FLT === "bench") return (M.bench || []).includes(p.id);
+    if (ML_SQ_FLT === "fit") return p.fit >= 70;
+    if (ML_SQ_FLT === "tired") return p.fit < 70;
+    return true;
+  });
+
+  // Sort squad
+  filteredSquad.sort((a, b) => {
+    if (ML_SQ_SORT === "fit") return b.fit - a.fit || b.ovr - a.ovr;
+    if (ML_SQ_SORT === "age") return a.age - b.age || b.ovr - a.ovr;
+    if (ML_SQ_SORT === "val") return b.value - a.value;
+    return b.ovr - a.ovr;
+  });
+
+  const renderPlayerRow = (p) => {
+    const inXI = M.xi.includes(p.id);
+    const inBench = (M.bench || []).includes(p.id);
+    const open = openId === p.id;
+    const trainable = p.ovr < p.pot;
+    const expPct = trainable ? Math.round(100 * (p.exp || 0) / mlExpNeed(p)) : 0;
+    return `<div class="sqrow${inXI ? " xi" : ""}${open ? " open" : ""}">
+      <div class="sqmain" data-sqrow="${p.id}">
+        <span class="sqid">${inXI ? "★" : inBench ? "🪑" : ""}${mlRpos(p)}</span>
+        <span class="sqname">${p.name}${mlCardChip(p)} ${mlFormArrow(p)}</span>
+        <span class="sqovr">${p.ovr}${p.pot > p.ovr ? `<span class="sub">/${p.pot}</span>` : ""}</span>
+      </div>
+      <div class="sqsub">${fitBar(p)}<span class="sub">fit ${Math.round(p.fit)}% · age ${p.age} · ${fmtM(p.value)}${trainable ? ` · ${expPct}%` : ""}</span></div>
+      ${open ? `<div class="sqact">
+        ${trainable ? `<button class="btn gold" data-trainp="${p.id}">TRAIN</button>` : `<span class="sub" style="padding:6px">MAX POTENTIAL</span>`}
+        <button class="btn secondary" data-conv="${p.id}">♻ TRAINER</button>
+        <button class="btn secondary" data-sell="${p.id}">SELL 85%</button>
+      </div>` : ""}
+    </div>`;
+  };
+
   const rows = ["GK", "DF", "MF", "FW"].map(bucket => {
-    const ps = M.squad.filter(p => p.pos === bucket).sort((a, b) => b.ovr - a.ovr);
+    const ps = filteredSquad.filter(p => p.pos === bucket);
     if (!ps.length) return "";
-    const body = ps.map(p => {
-      const inXI = M.xi.includes(p.id);
-      const open = openId === p.id;
-      const trainable = p.ovr < p.pot;
-      const expPct = trainable ? Math.round(100 * (p.exp || 0) / mlExpNeed(p)) : 0;
-      return `<div class="sqrow${inXI ? " xi" : ""}${open ? " open" : ""}">
-        <div class="sqmain" data-sqrow="${p.id}">
-          <span class="sqid">${inXI ? "\u2605" : ""}${mlRpos(p)}</span>
-          <span class="sqname">${p.name}${mlCardChip(p)} ${mlFormArrow(p)}</span>
-          <span class="sqovr">${p.ovr}${p.pot > p.ovr ? `<span class="sub">/${p.pot}</span>` : ""}</span>
-        </div>
-        <div class="sqsub">${fitBar(p)}<span class="sub">age ${p.age} \u00b7 ${fmtM(p.value)}${trainable ? ` \u00b7 ${expPct}%` : ""}</span></div>
-        ${open ? `<div class="sqact">
-          ${trainable ? `<button class="btn gold" data-trainp="${p.id}">TRAIN</button>` : `<span class="sub">MAX</span>`}
-          <button class="btn secondary" data-conv="${p.id}">\u267b TRAINER</button>
-          <button class="btn secondary" data-sell="${p.id}">SELL 85%</button>
-        </div>` : ""}
-      </div>`;
-    }).join("");
-    return `<div class="sqsec">${bucket} \u00b7 ${ps.length}</div>${body}`;
-  }).join("");
+    const body = ps.map(renderPlayerRow).join("");
+    return `<div class="sqsec">${bucket} · ${ps.length}</div>${body}`;
+  }).join("") || '<p class="sub" style="padding:16px 0;text-align:center">No players match current filter.</p>';
+
+  const fltTabs = [
+    { id: "all", label: "All (" + M.squad.length + ")" },
+    { id: "xi", label: "★ Starting XI" },
+    { id: "bench", label: "🪑 Bench" },
+    { id: "GK", label: "GK" },
+    { id: "DF", label: "DF" },
+    { id: "MF", label: "MF" },
+    { id: "FW", label: "FW" },
+    { id: "fit", label: "⚡ Fit (70%+)" },
+    { id: "tired", label: "😴 Tired (<70%)" }
+  ];
+
   return `<div class="screen">${mlTopbar()}
-    <div class="panel"><h2>Squad (${M.squad.length}) <button class="btn secondary" id="autoxi" style="float:right;padding:6px 10px;font-size:.7rem">\u2605 AUTO XI</button></h2>
-    <p class="sub">\u2605 XI \u00b7 ${M.formation} \u00b7 str <b>${mlTeamStr(0)}</b> \u00b7 tap a player for TRAIN / SELL. Trainers: \ud83e\udd49${M.trainers.bronze} \ud83e\udd48${M.trainers.silver} \ud83e\udd47${M.trainers.gold}</p>
-    ${rows}</div>
+    <div class="panel">
+      <h2>Squad (${M.squad.length})</h2>
+      <div class="optrow" style="gap:6px;margin-bottom:8px">
+        <button class="btn secondary" id="autoxi" style="flex:1;padding:7px 10px;font-size:.72rem">★ AUTO XI (BEST)</button>
+        <button class="btn gold" id="autoxifit" style="flex:1;padding:7px 10px;font-size:.72rem">⚡ AUTO XI (FITNESS)</button>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin:6px 0">
+        <span class="sub" style="font-weight:700">Filter & Sort</span>
+        <select id="sqsortsel" style="padding:4px 8px;background:#101812;color:var(--gold);border:1px solid var(--line);border-radius:6px;font-size:.72rem">
+          <option value="ovr" ${ML_SQ_SORT === "ovr" ? "selected" : ""}>Sort: OVR (High)</option>
+          <option value="fit" ${ML_SQ_SORT === "fit" ? "selected" : ""}>Sort: Fitness (High)</option>
+          <option value="age" ${ML_SQ_SORT === "age" ? "selected" : ""}>Sort: Age (Young)</option>
+          <option value="val" ${ML_SQ_SORT === "val" ? "selected" : ""}>Sort: Value (High)</option>
+        </select>
+      </div>
+      <div class="filter-bar">
+        ${fltTabs.map(t => `<button class="filter-pill ${ML_SQ_FLT === t.id ? "active" : ""}" data-sqflt="${t.id}">${t.label}</button>`).join("")}
+      </div>
+      <p class="sub" style="margin-top:6px">★ XI · ${M.formation} · str <b>${mlTeamStr(0)}</b> · tap a player for TRAIN / SELL. Trainers: 🥉${M.trainers.bronze} 🥈${M.trainers.silver} 🥇${M.trainers.gold}</p>
+      ${rows}
+    </div>
     ${mlNav()}</div>`;
 }
 
@@ -536,9 +657,10 @@ function mlTrainScreen(pid) {
   const need = mlExpNeed(p);
   const maxed = p.ovr >= p.pot;
   setTimeout(() => {
+    // Single card use
     document.querySelectorAll("[data-use]").forEach(b => b.onclick = () => {
       const tier = b.dataset.use;
-      if (M.trainers[tier] <= 0) { toast("None left \u2014 win matches or buy in Card Draws"); return; }
+      if (M.trainers[tier] <= 0) { toast("None left — win matches or buy in Card Draws"); return; }
       if (p.ovr >= p.pot) { toast("At full potential"); return; }
       M.trainers[tier]--;
       p.exp = (p.exp || 0) + ML_TRAINERS[tier].exp;
@@ -546,24 +668,86 @@ function mlTrainScreen(pid) {
       while (p.exp >= mlExpNeed(p) && p.ovr < p.pot) { p.exp -= mlExpNeed(p); p.ovr++; ups++; }
       if (p.ovr >= p.pot) p.exp = 0;
       p.value = mlValue(p.ovr, p.age);
-      if (ups) { mlNews("LEVELED UP: " + p.name + " \u2192 OVR " + p.ovr); toast("\ud83d\udcaa " + p.name + " \u2192 OVR " + p.ovr); }
+      if (ups) { mlNews("LEVELED UP: " + p.name + " → OVR " + p.ovr); toast("💪 " + p.name + " → OVR " + p.ovr); }
       mlAutoXI(); mlSave(); render(() => mlTrainScreen(pid));
     });
+
+    // Auto-Train: applies minimum trainers to level up 1 OVR
+    const at = $("#trauto");
+    if (at) at.onclick = () => {
+      if (maxed) { toast("At full potential"); return; }
+      const totalTrainers = M.trainers.bronze + M.trainers.silver + M.trainers.gold;
+      if (totalTrainers <= 0) { toast("No trainer cards left"); return; }
+      let needed = mlExpNeed(p) - (p.exp || 0);
+      let ups = 0;
+      while (needed > 0 && p.ovr < p.pot) {
+        let tier = null;
+        if (needed >= 160 && M.trainers.gold > 0) tier = "gold";
+        else if (needed >= 60 && M.trainers.silver > 0) tier = "silver";
+        else if (M.trainers.bronze > 0) tier = "bronze";
+        else if (M.trainers.silver > 0) tier = "silver";
+        else if (M.trainers.gold > 0) tier = "gold";
+        if (!tier) break;
+        M.trainers[tier]--;
+        p.exp = (p.exp || 0) + ML_TRAINERS[tier].exp;
+        while (p.exp >= mlExpNeed(p) && p.ovr < p.pot) {
+          p.exp -= mlExpNeed(p); p.ovr++; ups++;
+        }
+        needed = mlExpNeed(p) - (p.exp || 0);
+        if (ups > 0) break; // leveled up by 1 point!
+      }
+      if (p.ovr >= p.pot) p.exp = 0;
+      p.value = mlValue(p.ovr, p.age);
+      if (ups) mlNews("LEVELED UP: " + p.name + " → OVR " + p.ovr);
+      mlAutoXI(); mlSave();
+      toast(ups ? `⚡ Leveled up to OVR ${p.ovr}!` : "Trainers applied!");
+      render(() => mlTrainScreen(pid));
+    };
+
+    // Max-Train: trains up to pot using available cards
+    const mt = $("#trmax");
+    if (mt) mt.onclick = () => {
+      if (maxed) { toast("At full potential"); return; }
+      let ups = 0;
+      while (p.ovr < p.pot) {
+        let tier = null;
+        if (M.trainers.gold > 0) tier = "gold";
+        else if (M.trainers.silver > 0) tier = "silver";
+        else if (M.trainers.bronze > 0) tier = "bronze";
+        if (!tier) break;
+        M.trainers[tier]--;
+        p.exp = (p.exp || 0) + ML_TRAINERS[tier].exp;
+        while (p.exp >= mlExpNeed(p) && p.ovr < p.pot) {
+          p.exp -= mlExpNeed(p); p.ovr++; ups++;
+        }
+      }
+      if (p.ovr >= p.pot) p.exp = 0;
+      p.value = mlValue(p.ovr, p.age);
+      if (ups) mlNews("LEVELED UP: " + p.name + " → OVR " + p.ovr);
+      mlAutoXI(); mlSave();
+      toast(ups ? `★ Max-trained: +${ups} OVR (now OVR ${p.ovr})!` : "No trainers available");
+      render(() => mlTrainScreen(pid));
+    };
+
     $("#trback").onclick = () => render(mlSquadScreen);
   }, 0);
   const pct = maxed ? 100 : Math.round(100 * (p.exp || 0) / need);
   return `<div class="screen">${mlTopbar()}
     <div class="panel">
-      <h2>\ud83d\udcaa Training: ${p.name}</h2>
-      <div class="kv"><span>${mlRpos(p)} \u00b7 age ${p.age}${p.card ? " \u00b7 " + p.card : ""}</span><b>OVR ${p.ovr}${p.pot > p.ovr ? " / " + p.pot + " potential" : " (MAX)"}</b></div>
-      ${maxed ? '<p class="sub">At full potential \u2014 trainers would be wasted.</p>' : `
+      <h2>💪 Training: ${p.name}</h2>
+      <div class="kv"><span>${mlRpos(p)} · age ${p.age}${p.card ? " · " + p.card : ""}</span><b>OVR ${p.ovr}${p.pot > p.ovr ? " / " + p.pot + " potential" : " (MAX)"}</b></div>
+      ${maxed ? '<p class="sub">At full potential — trainers would be wasted.</p>' : `
       <div class="mombar" style="margin:8px 0"><div class="momfill" style="width:${pct}%"></div></div>
-      <p class="sub center">${p.exp || 0} / ${need} EXP to OVR ${p.ovr + 1}</p>`}
+      <p class="sub center">${p.exp || 0} / ${need} EXP to OVR ${p.ovr + 1}</p>
+      <div class="optrow" style="margin:8px 0;gap:8px">
+        <button class="btn secondary" id="trauto" ${maxed ? "disabled" : ""} style="flex:1">⚡ AUTO-TRAIN (+1 OVR)</button>
+        <button class="btn gold" id="trmax" ${maxed ? "disabled" : ""} style="flex:1">★ MAX-TRAIN</button>
+      </div>`}
       ${Object.entries(ML_TRAINERS).map(([id, t]) =>
-        `<div class="kv"><span>${t.label}<br><span class="sub">+${t.exp} EXP \u00b7 you have ${M.trainers[id]}</span></span>
+        `<div class="kv"><span>${t.label}<br><span class="sub">+${t.exp} EXP · you have ${M.trainers[id]}</span></span>
          <button class="btn ${id === "gold" ? "gold" : "secondary"}" data-use="${id}" ${M.trainers[id] <= 0 || maxed ? "disabled" : ""}>USE</button></div>`).join("")}
-      <p class="sub">Earn trainers by winning matches & events, buy them in Card Draws, or \u267b convert surplus players.</p>
-      <button class="btn secondary" id="trback">\u2b05 SQUAD</button>
+      <p class="sub">Earn trainers by winning matches & events, buy them in Card Draws, or ♻ convert surplus players.</p>
+      <button class="btn secondary" id="trback">⬅ SQUAD</button>
     </div>
   </div>`;
 }
@@ -580,8 +764,21 @@ function mlTacticsScreen() {
     document.querySelectorAll("[data-styl]").forEach(o => o.onclick = () => {
       M.style = o.dataset.styl; mlSave(); render(mlTacticsScreen);
     });
+    const ax = $("#tacautoxi"); if (ax) ax.onclick = () => { mlAutoXI(false); mlSave(); toast("★ Best XI picked"); render(mlTacticsScreen); };
+    const axFit = $("#tacfitxi"); if (axFit) axFit.onclick = () => { mlAutoXI(true); mlSave(); toast("⚡ Fresh XI picked (fit >= 70%)"); render(mlTacticsScreen); };
   }, 0);
+  const xiPlayers = mlXIPlayers();
+  const avgFit = Math.round(xiPlayers.reduce((a, b) => a + b.fit, 0) / (xiPlayers.length || 1));
+  const tiredN = xiPlayers.filter(p => p.fit < 70).length;
   return `<div class="screen">${mlTopbar()}
+    <div class="panel"><h2>Tactical XI & Squad Rotation</h2>
+      <div class="kv"><span>XI Average Fitness</span><b style="color:${avgFit >= 70 ? 'var(--green)' : 'var(--gold)'}">${avgFit}% ${tiredN ? `(${tiredN} tired)` : '· Fresh'}</b></div>
+      <div class="optrow" style="gap:6px;margin:8px 0">
+        <button class="btn secondary" id="tacautoxi" style="flex:1;padding:8px 10px;font-size:.72rem">★ AUTO XI (BEST)</button>
+        <button class="btn gold" id="tacfitxi" style="flex:1;padding:8px 10px;font-size:.72rem">⚡ AUTO XI (FITNESS)</button>
+      </div>
+      <div class="sub" style="line-height:1.4">Auto-Pick (Fitness) rotates fatigued players to the bench, allowing them to rest and recover stamina while fielding your freshest available lineup.</div>
+    </div>
     <div class="panel"><h2>Formation</h2>
       <div class="optrow">${Object.keys(ML_FORMS).map(f =>
         `<div class="opt ${M.formation === f ? "sel" : ""}" data-form="${f}" style="flex:1 1 45%">${f}<br>
@@ -593,8 +790,8 @@ function mlTacticsScreen() {
       <p class="sub">Honest modifiers, shown exactly as applied to team strength. XI now: <b>${mlTeamStr(0) + ML_MENT[M.mentality].you}</b> effective.</p></div>
     <div class="panel"><h2>Playing Style</h2>
       <div class="optrow">${Object.entries(ML_STYLES).map(([id, st]) =>
-        `<div class="opt ${(M.style || "possession") === id ? "sel" : ""}" data-styl="${id}" style="flex:1 1 45%">${st.label}<br><span class="sub">beats ${ML_STYLES[st.beats].label} \u00b7 loses to ${ML_STYLES[st.losesTo].label}</span></div>`).join("")}</div>
-      <p class="sub">One pick, honest numbers: counter their style for <b>+1.0 str</b> (baked into the shown odds). Opponents\u2019 styles are hidden until you\u2019ve played them \u2014 or scout on the match preview.</p></div>
+        `<div class="opt ${(M.style || "possession") === id ? "sel" : ""}" data-styl="${id}" style="flex:1 1 45%">${st.label}<br><span class="sub">beats ${ML_STYLES[st.beats].label} · loses to ${ML_STYLES[st.losesTo].label}</span></div>`).join("")}</div>
+      <p class="sub">One pick, honest numbers: counter their style for <b>+1.0 str</b> (baked into the shown odds). Opponents’ styles are hidden until you’ve played them — or scout on the match preview.</p></div>
     ${mlNav()}</div>`;
 }
 
@@ -608,13 +805,12 @@ function mlMarketPool() {
   const pool = [];
   for (let i = 0; i < 6; i++) {
     const bucket = ["GK", "DF", "DF", "MF", "MF", "FW"][i];
-    const p = mlGenPlayer(rng, M.region, bucket, 56 + Math.floor(rng() * 25));
-    if (rng() < 0.25) { // special cards appear in the market too — LC-priced
+    const p = mlGenPlayer(rng, M.region, bucket, 66 + Math.floor(rng() * 12));
+    if (rng() < 0.35) { // special cards appear in the market too — LC-priced
       const roll = rng();
-      p.cardId = roll < 0.06 ? "legendary" : roll < 0.4 ? "bigtime" : roll < 0.72 ? "showtime" : "trending";
-      p.card = ML_CARDS[p.cardId].label;
-      mlGiveSkills(p, rng);
-      p.lcPrice = ML_CARDS[p.cardId].lc + Math.round(Math.max(0, p.ovr - 74) * 1.5);
+      const cardId = roll < 0.08 ? "legendary" : roll < 0.38 ? "bigtime" : roll < 0.72 ? "showtime" : "trending";
+      mlApplySpecialTier(p, cardId, rng);
+      p.lcPrice = ML_CARDS[cardId].lc + Math.round(Math.max(0, p.ovr - 80) * 1.5);
     }
     pool.push(p);
   }
@@ -641,27 +837,77 @@ function mlMarketScreen() {
       const p = (star && star.id === id) ? star : pool.find(x => x.id === id);
       if (!p) return;
       if (M.squad.length >= 26) { toast("Squad full (26)"); return; }
-      if (p.lcPrice) { // special card: LC only
-        if ((M.lc || 0) < p.lcPrice) { toast("Special cards cost LC \u2014 not enough"); return; }
-        M.lc -= p.lcPrice;
+
+      const price = p.lcPrice ? p.lcPrice : Math.round(p.value * 10) / 10;
+      const costStr = p.lcPrice ? (p.lcPrice + " LC") : fmtM(price);
+
+      if (p.lcPrice) {
+        if ((M.lc || 0) < p.lcPrice) { toast("Special cards cost LC — not enough LC"); return; }
       } else {
-        const price = Math.round(p.value * 10) / 10;
-        if (M.budget < price) { toast("Not enough budget"); return; }
-        M.budget = Math.round((M.budget - price) * 10) / 10;
+        if (M.budget < price) { toast("Not enough GP budget"); return; }
       }
-      M.squad.push(Object.assign({}, p));
-      if (p.bal) M.boughtBal = true;
-      mlAutoXI(); mlNews("SIGNED: " + p.name + " for " + fmtM(price)); mlSave();
-      toast("\u2705 " + p.name + " signs!"); render(mlMarketScreen);
+
+      // Confirmation dialog before purchase
+      const modal = document.createElement("div");
+      modal.className = "fl-modal-overlay";
+      modal.innerHTML = `
+        <div class="fl-modal-box">
+          <div class="fl-modal-title">Confirm Transfer</div>
+          <div class="fl-modal-desc">
+            Sign <b>${p.name}</b> (${mlRpos(p)} · OVR ${p.ovr}${p.card ? ' · ' + p.card : ''})<br>
+            Transfer Fee: <b style="color:var(--gold)">${costStr}</b><br>
+            Wage: ${p.wage}K/week
+          </div>
+          <div class="fl-modal-actions">
+            <button class="btn secondary" id="mktcancel">Cancel</button>
+            <button class="btn gold" id="mktconfirm">Sign Player</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(modal);
+
+      const closeModal = () => modal.remove();
+      modal.querySelector("#mktcancel").onclick = closeModal;
+      modal.querySelector("#mktconfirm").onclick = () => {
+        closeModal();
+        if (p.lcPrice) {
+          if ((M.lc || 0) < p.lcPrice) { toast("Not enough LC"); return; }
+          M.lc -= p.lcPrice;
+        } else {
+          if (M.budget < price) { toast("Not enough GP budget"); return; }
+          M.budget = Math.round((M.budget - price) * 10) / 10;
+        }
+        M.squad.push(Object.assign({}, p));
+        if (p.bal) M.boughtBal = true;
+        M.soldIds.push(p.id);
+        mlAutoXI();
+        mlNews("SIGNED: " + p.name + " (" + mlRpos(p) + " " + p.ovr + ") for " + costStr);
+        mlSave();
+
+        // Reactive DOM update: instant feedback without full page refresh
+        const rowEl = b.closest(".kv");
+        if (rowEl) {
+          b.disabled = true;
+          b.className = "badge green";
+          b.style.cursor = "default";
+          b.textContent = "✓ SIGNED";
+          rowEl.style.opacity = "0.7";
+        }
+        // Update topbar budget display reactively
+        const topEl = document.querySelector(".topbar");
+        if (topEl) topEl.outerHTML = mlTopbar();
+
+        toast(`✅ ${p.name} signed to your squad!`);
+      };
     });
   }, 0);
   const row = (p) => `<div class="kv"><span><b>${mlRpos(p)}</b> ${p.name}${mlCardChip(p)}<br>
-    <span class="sub">age ${p.age} \u00b7 OVR ${p.ovr}${p.pot > p.ovr ? "/" + p.pot : ""} \u00b7 ${p.wage}K/wk${(p.skills || []).length ? " \u00b7 \ud83c\udfaf " + p.skills.join(", ") : ""}</span></span>
+    <span class="sub">age ${p.age} · OVR ${p.ovr}${p.pot > p.ovr ? "/" + p.pot : ""} · ${p.wage}K/wk${(p.skills || []).length ? " · 🎯 " + p.skills.join(", ") : ""}</span></span>
     <button class="btn ${p.card ? "gold" : "secondary"}" data-buy="${p.id}">${p.lcPrice ? p.lcPrice + " LC" : fmtM(Math.round(p.value * 10) / 10)}</button></div>`;
   return `<div class="screen">${mlTopbar()}
-    ${star ? `<div class="panel"><h2>\u2b50 Available: your Legend</h2><p class="sub">Your Become a Legend player, exported to this market.</p>${row(star)}</div>` : ""}
+    ${star ? `<div class="panel"><h2>⭐ Available: your Legend</h2><p class="sub">Your Become a Legend player, exported to this market.</p>${row(star)}</div>` : ""}
     <div class="panel"><h2>Transfer Market <span class="badge gold">WEEK ${mlMarketWeek() % 52 + 1}</span></h2>
-    <p class="sub">\ud83c\udd95 New players every real-world week (next refresh: ${(() => { const d = new Date((mlMarketWeek() + 1) * 7 * 864e5); return d.toLocaleDateString(); })()}). Special cards cost LC. Sell from the Squad screen (85% of value).</p>
+    <p class="sub">🆕 New players every real-world week (next refresh: ${(() => { const d = new Date((mlMarketWeek() + 1) * 7 * 864e5); return d.toLocaleDateString(); })()}). Special cards cost LC. Sell from the Squad screen (85% of value).</p>
     ${pool.map(row).join("") || '<p class="sub">No targets this week.</p>'}</div>
     ${mlNav()}</div>`;
 }
@@ -693,19 +939,19 @@ function mlPacksScreen() {
       const bucket = ["GK", "DF", "MF", "MF", "FW"][Math.floor(rng() * 5)];
       let p;
       if (kind === "std") {
-        p = mlGenPlayer(rng, M.region, bucket, 62 + Math.floor(rng() * 13));
+        p = mlGenPlayer(rng, M.region, bucket, 66 + Math.floor(rng() * 11));
         p.cardId = null; p.card = null; p.skills = [];
       } else if (kind === "star") {
-        p = mlGenPlayer(rng, M.region, bucket, 74 + Math.floor(rng() * 9));
-        // honest tier odds, legendary chance in EVERY special draw:
+        p = mlGenPlayer(rng, M.region, bucket, 78 + Math.floor(rng() * 6));
         const roll = rng();
-        p.cardId = roll < 0.05 ? "legendary" : roll < 0.35 ? "bigtime" : roll < 0.65 ? "showtime" : "trending";
+        const cardId = roll < 0.08 ? "legendary" : roll < 0.38 ? "bigtime" : roll < 0.68 ? "showtime" : "trending";
+        mlApplySpecialTier(p, cardId, rng);
       } else { // "leg" — Legend Draw: guaranteed showtime+, big legendary chance
-        p = mlGenPlayer(rng, M.region, bucket, 80 + Math.floor(rng() * 8));
+        p = mlGenPlayer(rng, M.region, bucket, 86 + Math.floor(rng() * 6));
         const roll = rng();
-        p.cardId = roll < 0.25 ? "legendary" : roll < 0.65 ? "bigtime" : "showtime";
+        const cardId = roll < 0.30 ? "legendary" : roll < 0.70 ? "bigtime" : "showtime";
+        mlApplySpecialTier(p, cardId, rng);
       }
-      if (p.cardId) { p.card = ML_CARDS[p.cardId].label; mlGiveSkills(p, rng); p.value = mlValue(p.ovr, p.age) * 1.3; }
       M.squad.push(p); mlAutoXI(); mlNews("DRAW: " + p.name + " (" + p.ovr + " " + p.pos + (p.card ? " \u00b7 " + p.card : "") + ")");
       mlSave(); toast("\ud83c\udccf " + p.name + " \u00b7 OVR " + p.ovr + (p.card ? " \u00b7 " + p.card : ""));
       render(mlPacksScreen);
@@ -714,13 +960,13 @@ function mlPacksScreen() {
   return `<div class="screen">${mlTopbar()}
     <div class="panel"><h2>\ud83c\udccf Card Draws</h2>
       <p class="sub">Funded from your transfer budget. Odds are the generation ranges shown \u2014 nothing hidden.</p>
-      <div class="kv"><span><b>Standard Draw</b><br><span class="sub">OVR 62\u201374 \u00b7 STANDARD card \u00b7 no skills</span></span><button class="btn secondary" data-pack="std">3.0M GP</button></div>
-      <div class="kv"><span><b>\u2b50 Star Draw</b><br><span class="sub">OVR 74\u201382 \u00b7 TRENDING 35% / SHOW TIME 30% / BIG TIME 30% / LEGENDARY 5%</span></span><button class="btn gold" data-pack="star">30 LC</button></div>
-      <div class="kv"><span><b>\ud83d\udc51 Legend Draw</b><br><span class="sub">OVR 80\u201387 \u00b7 SHOW TIME 35% / BIG TIME 40% / LEGENDARY 25%</span></span><button class="btn gold" data-pack="leg">60 LC</button></div>
+      <div class="kv"><span><b>Standard Draw</b><br><span class="sub">OVR 66\u201377 \u00b7 STANDARD card \u00b7 no skills</span></span><button class="btn secondary" data-pack="std">3.0M GP</button></div>
+      <div class="kv"><span><b>\u2b50 Star Draw</b><br><span class="sub">OVR 83\u201391 \u00b7 TRENDING 32% / SHOW TIME 30% / BIG TIME 30% / LEGENDARY 8%</span></span><button class="btn gold" data-pack="star">30 LC</button></div>
+      <div class="kv"><span><b>\ud83d\udc51 Legend Draw</b><br><span class="sub">OVR 87\u201396 \u00b7 SHOW TIME 30% / BIG TIME 40% / LEGENDARY 30%</span></span><button class="btn gold" data-pack="leg">60 LC</button></div>
       <p class="sub">\ud83e\ude99 LC comes from cup runs, trophies, top-3 finishes, star performances and daily logins \u2014 or Become a Legend awards.</p>
     </div>
-    <div class="panel"><h2>\ud83d\udcaa Trainer Cards</h2>
-      <p class="sub">EXP material \u2014 apply to any player from the Squad screen. You have: \ud83e\udd49${M.trainers.bronze} \ud83e\udd48${M.trainers.silver} \ud83e\udd47${M.trainers.gold}</p>
+    <div class="panel"><h2>💪 Trainer Cards</h2>
+      <p class="sub">EXP material — apply to any player from the Squad screen. You have: 🥉${M.trainers.bronze} 🥈${M.trainers.silver} 🥇${M.trainers.gold}</p>
       ${Object.entries(ML_TRAINERS).map(([id, t]) =>
         `<div class="kv"><span>${t.label}<br><span class="sub">+${t.exp} EXP</span></span>
          <button class="btn ${id === "gold" ? "gold" : "secondary"}" data-buytr="${id}">${t.price.toFixed(1)}M</button></div>`).join("")}
@@ -773,10 +1019,58 @@ function mlTableScreen() {
     ${ctPanel}
     ${mlNav()}</div>`;
 }
+var ML_NEWS_CAT = "all";
 function mlNewsScreen() {
+  setTimeout(() => {
+    document.querySelectorAll("[data-newscat]").forEach(b => b.onclick = () => {
+      ML_NEWS_CAT = b.dataset.newscat;
+      render(mlNewsScreen);
+    });
+  }, 0);
+
+  const getCat = (txt) => {
+    const t = (txt || "").toUpperCase();
+    if (t.includes("SIGNED") || t.includes("SOLD") || t.includes("DRAW:") || t.includes("CONVERTED")) return "transfers";
+    if (t.includes("LEVELED UP") || t.includes("POTENTIAL") || t.includes("TRAINER")) return "training";
+    if (t.includes("MATCH") || t.includes("WIN") || t.includes("DEFEAT") || t.includes("CUP") || t.includes("CHAMPIONS") || t.includes("ABANDONED")) return "matches";
+    return "general";
+  };
+
+  const cats = [
+    { id: "all", label: "All News" },
+    { id: "transfers", label: "🔄 Transfers" },
+    { id: "matches", label: "⚽ Matches" },
+    { id: "training", label: "💪 Training" }
+  ];
+
+  const filtered = M.news.filter(n => {
+    if (ML_NEWS_CAT === "all") return true;
+    return getCat(n.txt) === ML_NEWS_CAT;
+  });
+
+  const getBadge = (txt) => {
+    const cat = getCat(txt);
+    if (cat === "transfers") return '<span class="badge gold" style="font-size:.65rem">TRANSFER</span>';
+    if (cat === "training") return '<span class="badge green" style="font-size:.65rem">DEVELOPMENT</span>';
+    if (cat === "matches") return '<span class="badge blue" style="font-size:.65rem">MATCH</span>';
+    return '<span class="badge" style="font-size:.65rem">CLUB</span>';
+  };
+
   return `<div class="screen">${mlTopbar()}
-    <div class="panel"><h2>\ud83d\udcf0 Club News</h2>
-    ${M.news.map(n => `<div class="kv"><span class="sub">S${n.s} MD${n.md}</span><span>${n.txt}</span></div>`).join("") || '<p class="sub">Quiet so far.</p>'}</div>
+    <div class="panel">
+      <h2>📰 Club Newsroom</h2>
+      <div class="filter-bar" style="margin-bottom:10px">
+        ${cats.map(c => `<button class="filter-pill ${ML_NEWS_CAT === c.id ? "active" : ""}" data-newscat="${c.id}">${c.label}</button>`).join("")}
+      </div>
+      ${filtered.map(n => `
+        <div class="news-card">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+            ${getBadge(n.txt)}
+            <span class="sub" style="font-size:.68rem">Season ${n.s} · MD ${n.md}</span>
+          </div>
+          <div style="font-size:.82rem;line-height:1.35">${n.txt}</div>
+        </div>`).join("") || '<p class="sub" style="text-align:center;padding:20px 0">No news in this category yet.</p>'}
+    </div>
     ${mlNav()}</div>`;
 }
 
@@ -863,19 +1157,27 @@ function mlBenchScreen() {
     document.querySelectorAll("[data-btog]").forEach(el => el.onclick = () => {
       const id = +el.dataset.btog;
       if (M.bench.includes(id)) M.bench = M.bench.filter(x => x !== id);
-      else if (M.bench.length >= 10) { toast("Bench is full (10) \u2014 remove someone first."); return; }
+      else if (M.bench.length >= 10) { toast("Bench is full (10) — remove someone first."); return; }
       else M.bench.push(id);
       mlSave(); render(mlBenchScreen);
     });
+    const ab = $("#mlautobench");
+    if (ab) ab.onclick = () => {
+      mlAutoBench();
+      mlSave();
+      toast("★ Bench auto-picked (10 substitutes)");
+      render(mlBenchScreen);
+    };
     const bk = $("#mlbback"); if (bk) bk.onclick = () => render(mlPreview);
   }, 0);
   return `<div class="screen">${mlTopbar()}
     <div class="panel">
-      <h2>\ud83e\ude91 Match Bench <span class="badge gold" style="float:right">${M.bench.length}/10</span></h2>
-      <p class="sub">Pick up to 10. Only benched players can come on during the match.</p>
+      <h2>🪑 Match Bench <span class="badge gold" style="float:right">${M.bench.length}/10</span></h2>
+      <p class="sub">Pick up to 10 substitutes. Only benched players can come on during the match.</p>
+      <button class="btn gold" id="mlautobench" style="margin-bottom:8px">★ AUTO-PICK BENCH (10)</button>
       ${nonXI.map(p => `<div class="opt ${M.bench.includes(p.id) ? "sel" : ""}" data-btog="${p.id}" style="font-size:.72rem;margin:3px 0">
-        ${M.bench.includes(p.id) ? "\u2705" : "\u2b1c"} ${mlRpos(p)} ${p.name} \u00b7 OVR ${p.ovr} \u00b7 fit ${Math.round(p.fit)}%</div>`).join("") || '<p class="sub">Every fit player is in the XI.</p>'}
-      <button class="btn" id="mlbback">DONE \u2794</button>
+        ${M.bench.includes(p.id) ? "✅" : "⬜"} ${mlRpos(p)} ${p.name} · OVR ${p.ovr} · fit ${Math.round(p.fit)}%</div>`).join("") || '<p class="sub">Every fit player is in the XI.</p>'}
+      <button class="btn" id="mlbback">DONE ➔</button>
     </div>
   </div>`;
 }
@@ -959,15 +1261,6 @@ function mlMatchScreen(fx, displayedProbs) {
   let ment = M.mentality;
   let subsLeft = mlSubsAllowed(fx), subbedOnIds = [], windowsShown = { 45: false, 65: false };
   const benchIds = mlBench().slice();
-  const myStart = mlEffClub(ment, { big: mlBigMatch(fx) }).str + duel.you;
-  const match = E.createMatch(
-    meHome ? Object.assign({}, Hc, { str: myStart }) : Hc,
-    meHome ? Ac : Object.assign({}, Ac, { str: myStart }),
-    { seed });
-  // opponent mentality effect applies to their side too (ML_MENT.opp)
-  applyStrengths(0);
-  let timer = null, speed = 1, over = false;
-
   const bigMatch = mlBigMatch(fx);
   function applyStrengths(minPlayed, attacking) {
     const mm = ML_MENT[ment];
@@ -977,6 +1270,14 @@ function mlMatchScreen(fx, displayedProbs) {
     if (meHome) match.setStrengths(mine + 4, theirs);
     else match.setStrengths(theirs + 4, mine);
   }
+  const myStart = mlEffClub(ment, { big: bigMatch }).str + duel.you;
+  const match = E.createMatch(
+    meHome ? Object.assign({}, Hc, { str: myStart }) : Hc,
+    meHome ? Ac : Object.assign({}, Ac, { str: myStart }),
+    { seed });
+  // opponent mentality effect applies to their side too (ML_MENT.opp)
+  applyStrengths(0);
+  let timer = null, speed = 1, over = false;
   setTimeout(() => {
     // ---- anti-replay: consumed at kickoff ----
     M.playedKeys = M.playedKeys || [];
@@ -1321,7 +1622,7 @@ function mlMatchScreen(fx, displayedProbs) {
       document.querySelectorAll("[data-mlspeed]").forEach(x => x.classList.toggle("on", +x.dataset.mlspeed === speed));
       if (timer) runClock();
     });
-    if (window.Snd) Snd.kickoff();
+    try { if (window.Snd && typeof Snd.kickoff === "function") Snd.kickoff(); } catch (e) { console.warn("Audio kickoff failed:", e); }
     addTick(0, `Kick off! ${M.formation} \u00b7 ${ML_MENT[ment].label}. Odds were ${displayedProbs.home}/${displayedProbs.draw}/${displayedProbs.away}.`, "");
     runClock();
   }, 0);
