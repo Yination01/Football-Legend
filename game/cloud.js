@@ -116,16 +116,37 @@ var Cloud = (function () {
     toast("Signed out \u2014 game continues offline");
   }
 
+  function ensureSession() {
+    if (!sb) return Promise.resolve(session);
+    return sb.auth.getSession().then(function (r) {
+      if (r && r.data && r.data.session) {
+        session = r.data.session;
+      }
+      return session;
+    }).catch(function () {
+      return session;
+    });
+  }
+
   function fn(name, body) { // call an edge function with the user's JWT
-    return fetch(FL_CLOUD_URL + "/functions/v1/" + name, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: "Bearer " + session.access_token,
-        apikey: FL_CLOUD_ANON,
-      },
-      body: JSON.stringify(body),
-    }).then(function (r) { return r.json().then(function (j) { return { status: r.status, body: j }; }); });
+    return ensureSession().then(function (sess) {
+      var token = (sess && sess.access_token) ? sess.access_token : "";
+      return fetch(FL_CLOUD_URL + "/functions/v1/" + name, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: "Bearer " + token,
+          apikey: FL_CLOUD_ANON,
+        },
+        body: JSON.stringify(body),
+      }).then(function (r) {
+        return r.text().then(function (t) {
+          var j = null;
+          try { j = JSON.parse(t); } catch (_) {}
+          return { status: r.status, body: j, raw: t };
+        });
+      });
+    });
   }
 
   function checkAdmin() {
@@ -196,25 +217,69 @@ var Cloud = (function () {
     }
   }
 
+  function checkCloudStatus() {
+    if (!signedIn()) return Promise.resolve({ ok: false, msg: "Not signed in" });
+    return ensureSession().then(function () {
+      return sb.from("saves").select("bal_save, ml_save, bal_updated, ml_updated").eq("uid", session.user.id).maybeSingle()
+        .then(function (res) {
+          if (res.error) return { ok: false, error: res.error.message };
+          var sv = res.data;
+          if (!sv || (!sv.bal_save && !sv.ml_save)) {
+            return { ok: true, found: false };
+          }
+          var parts = [];
+          if (sv.bal_save) parts.push("BaL (S" + (sv.bal_save.season || 1) + ")");
+          if (sv.ml_save) parts.push("ML (S" + (sv.ml_save.season || 1) + ")");
+          return { ok: true, found: true, summary: parts.join(" · ") || "Cloud save on file" };
+        });
+    }).catch(function (err) {
+      return { ok: false, error: (err && err.message) || "Connection error" };
+    });
+  }
+
   function restoreCloudSave() {
-    if (!signedIn()) { toast("Please sign in first"); return Promise.resolve(false); }
-    toast("Checking cloud save...");
-    return fn("sync-save", { mode: "pull" }).then(function (r) {
-      if (r.status !== 200) {
-        toast((r.body && r.body.error) || "Could not reach cloud");
+    if (!signedIn()) {
+      alert("⚠️ Not Signed In\n\nPlease sign in with your Google account in Settings > Account before attempting to restore a cloud save.");
+      return Promise.resolve(false);
+    }
+    toast("⏳ Checking cloud save...");
+    return ensureSession().then(function () {
+      return sb.from("saves").select("bal_save, ml_save, bal_updated, ml_updated").eq("uid", session.user.id).maybeSingle()
+        .then(function (res) {
+          if (!res.error && res.data) {
+            return res.data;
+          }
+          return fn("sync-save", { mode: "pull" }).then(function (r) {
+            if (r.status === 401) throw new Error("session_expired");
+            if (r.status !== 200) {
+              var errDetail = (r.body && r.body.error) || ("Server HTTP " + r.status);
+              throw new Error(errDetail);
+            }
+            return (r.body && r.body.save) || null;
+          });
+        });
+    }).then(function (sv) {
+      var email = accountEmail() || "Google account";
+      var bal = sv && sv.bal_save;
+      var ml = sv && sv.ml_save;
+
+      if (!sv || (!bal && !ml)) {
+        alert("ℹ️ No Cloud Save on File\n\nConnected Account: " + email + "\n\nThere is currently no saved career in the cloud for this Google account.\n\nWhy this happens:\n• If your save is on another device: open Football Legend on that device and tap 'SYNC TO CLOUD' to upload it first.\n• If you started a career on this device: tap 'SYNC TO CLOUD' to create your cloud backup.\n• If you have multiple Google accounts: check if you signed into the right one.");
         return false;
       }
-      var sv = r.body && r.body.save;
-      if (!sv || (!sv.bal_save && !sv.ml_save)) {
-        toast("No cloud save found for this account");
-        return false;
-      }
-      var bal = sv.bal_save;
-      var ml = sv.ml_save;
+
       var parts = [];
-      if (bal) parts.push("BaL: " + bal.name + " (Season " + bal.season + ")");
-      if (ml) parts.push("ML: " + (ml.clubName || "Club") + " (Season " + ml.season + ")");
-      var msg = "\u2601\ufe0f Cloud save found:\n" + parts.join("\n") + "\n\nRestore this to your device? Current local progress will be replaced.";
+      if (bal) {
+        var balDate = sv.bal_updated ? (" · Saved: " + new Date(sv.bal_updated).toLocaleDateString()) : "";
+        parts.push("⚽ BaL Player: " + (bal.name || "Legend") + " (Season " + (bal.season || 1) + ", Matchday " + (bal.matchday || 1) + ", " + (bal.pos || "") + " OVR " + (bal.ovr || "?") + balDate + ")");
+      }
+      if (ml) {
+        var mlDate = sv.ml_updated ? (" · Saved: " + new Date(sv.ml_updated).toLocaleDateString()) : "";
+        var trophies = (ml.career || []).filter(function (c) { return c.pos === 1 || c.cup === "WON"; }).length;
+        parts.push("🏆 Master League: " + (ml.clubName || "Club") + " (Season " + (ml.season || 1) + ", Trophies: " + trophies + mlDate + ")");
+      }
+
+      var msg = "☁️ Cloud Save Found!\n\nAccount: " + email + "\n\n" + parts.join("\n\n") + "\n\n⚠️ OVERWRITE WARNING:\nRestoring will replace your current local progress on this device with the cloud save.\n\nDo you want to restore this career?";
       if (confirm(msg)) {
         if (bal) {
           window.S = bal;
@@ -226,34 +291,75 @@ var Cloud = (function () {
           localStorage.setItem(ML_CLOUD_KEY, JSON.stringify(ml));
           if (window.flMirror) flMirror(ML_CLOUD_KEY, JSON.stringify(ml));
         }
-        toast("\u2705 Cloud save restored! Reloading...");
+        toast("✅ Cloud save restored! Reloading...");
         setTimeout(function () { location.reload(); }, 600);
         return true;
       }
       return false;
     }).catch(function (err) {
-      toast("Restore failed: " + ((err && err.message) || "network error"));
+      var msg = (err && err.message) || String(err || "");
+      if (msg === "session_expired" || /jwt|unauthenticated|token/i.test(msg)) {
+        alert("🔒 Session Expired\n\nYour Google account authentication has expired.\n\nPlease tap 'SIGN OUT' in Settings > Account, then tap 'SIGN IN WITH GOOGLE' to refresh your session.");
+      } else if (!navigator.onLine || /network|fetch|offline/i.test(msg)) {
+        alert("📡 Connection Error\n\nCould not reach cloud servers. Please check your internet connection and try again.");
+      } else {
+        alert("❌ Cloud Restore Error\n\nCould not restore cloud save.\nReason: " + msg + "\n\nPlease check your internet connection or try signing out and signing in again.");
+      }
       return false;
     });
   }
 
   function syncNow() {
-    if (!signedIn()) { toast("Please sign in first"); return Promise.resolve(false); }
-    toast("Syncing to cloud...");
+    if (!signedIn()) {
+      alert("⚠️ Not Signed In\n\nPlease sign in with your Google account in Settings > Account before syncing to cloud.");
+      return Promise.resolve(false);
+    }
     var balPayload = (window.S && !S.retired) ? S : null;
     var mlPayload = null;
     try { mlPayload = JSON.parse(localStorage.getItem(ML_CLOUD_KEY) || "null"); } catch (e) {}
-    if (!balPayload && !mlPayload) { toast("No active career to upload"); return Promise.resolve(false); }
-    var promises = [];
-    if (balPayload) promises.push(fn("sync-save", { mode: "bal", save: balPayload }));
-    if (mlPayload) promises.push(fn("sync-save", { mode: "ml", save: mlPayload }));
-    return Promise.all(promises).then(function () {
-      toast("\u2705 Careers backed up to cloud!");
-      lastSync.bal = Date.now();
-      lastSync.ml = Date.now();
-      return true;
-    }).catch(function () {
-      toast("Sync failed. Check connection.");
+    if (!balPayload && !mlPayload) {
+      alert("⚠️ Nothing to Sync\n\nNo active BaL player or Master League club found on this phone to upload. Start a career first!");
+      return Promise.resolve(false);
+    }
+    toast("⏳ Backing up career to cloud...");
+    return ensureSession().then(function () {
+      var promises = [];
+      if (balPayload) promises.push(fn("sync-save", { mode: "bal", save: balPayload }));
+      if (mlPayload) promises.push(fn("sync-save", { mode: "ml", save: mlPayload }));
+      return Promise.all(promises).then(function (results) {
+        for (var i = 0; i < results.length; i++) {
+          var r = results[i];
+          if (r.status === 422) {
+            var reasons = (r.body && r.body.reasons) ? r.body.reasons.join(", ") : "Validation failed";
+            alert("❌ Cloud Sync Rejected\n\nThe server rejected your career:\n" + reasons);
+            return false;
+          }
+          if (r.status === 401) {
+            alert("🔒 Session Expired\n\nYour sign-in session expired. Please sign out and sign in again.");
+            return false;
+          }
+          if (r.status !== 200) {
+            var err = (r.body && r.body.error) || ("HTTP " + r.status);
+            alert("❌ Cloud Sync Failed\n\nServer returned: " + err);
+            return false;
+          }
+        }
+        lastSync.bal = Date.now();
+        lastSync.ml = Date.now();
+        var email = accountEmail() || "Google account";
+        var items = [];
+        if (balPayload) items.push("BaL: " + balPayload.name + " (Season " + balPayload.season + ")");
+        if (mlPayload) items.push("ML: " + (mlPayload.clubName || "Club") + " (Season " + mlPayload.season + ")");
+        alert("✅ Cloud Backup Successful!\n\nUploaded to " + email + ":\n• " + items.join("\n• ") + "\n\nYour career is now securely saved online and can be restored on any device.");
+        return true;
+      });
+    }).catch(function (err) {
+      var msg = (err && err.message) || String(err || "");
+      if (!navigator.onLine || /network|fetch|offline/i.test(msg)) {
+        alert("📡 Connection Error\n\nCould not reach cloud servers. Please check your internet connection.");
+      } else {
+        alert("❌ Cloud Sync Failed\n\nError: " + msg);
+      }
       return false;
     });
   }
@@ -373,7 +479,8 @@ var Cloud = (function () {
            fetchLeaderboard: fetchLeaderboard, fetchGhosts: fetchGhosts,
            fetchSeasonBoard: fetchSeasonBoard, fetchSeasons: fetchSeasons,
            verifyOwner: verifyOwner, checkAdmin: checkAdmin, isAdmin: isAdmin,
-           accountEmail: accountEmail, restoreCloudSave: restoreCloudSave, syncNow: syncNow };
+           accountEmail: accountEmail, restoreCloudSave: restoreCloudSave, syncNow: syncNow,
+           checkCloudStatus: checkCloudStatus };
 })();
 
 // boot: harmless when unconfigured

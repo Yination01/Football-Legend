@@ -3348,15 +3348,15 @@ function newsInboxScreen() {
           <span style="font-size:1.05rem">⟳</span>
           <span class="sub" style="font-size:.72rem">Refresh</span>
         </button>
-        <span class="badge gold" style="font-size:.72rem">v1.5 (Preview 12)</span>
+        <span class="badge gold" style="font-size:.72rem">v1.5 (Preview 13)</span>
       </div>
     </div>
     <div class="panel" style="border:1px solid var(--gold);background:rgba(255,215,94,.05)">
-      <div class="kv"><span style="color:var(--gold);font-weight:800;font-size:.9rem">⚡ WHAT'S NEW IN LATEST PATCH</span><span class="sub">Preview 12</span></div>
+      <div class="kv"><span style="color:var(--gold);font-weight:800;font-size:.9rem">⚡ WHAT'S NEW IN LATEST PATCH</span><span class="sub">Preview 13</span></div>
       <ul style="margin:8px 0 0;padding-left:18px;line-height:1.5;font-size:.82rem;color:var(--sub)">
-        <li><b style="color:var(--text)">🔑 Seamless In-Place Updates:</b> Fixed signing key configuration with a permanent keystore so future builds install directly over existing versions without requiring uninstallation.</li>
-        <li><b style="color:var(--text)">📥 One-Tap Cloud Restore:</b> Dedicated "Restore Cloud Save" and "Sync to Cloud" buttons in Settings > Account — restoring your career across devices without requiring backup codes.</li>
-        <li><b style="color:var(--text)">🛡️ Intelligent Reinstall Recovery:</b> Automatically detects and offers to restore your existing cloud career on fresh installs and device upgrades.</li>
+        <li><b style="color:var(--text)">🔍 Crystal-Clear Cloud Diagnostics:</b> Settings > Account now displays live cloud save info, and Restore/Sync displays full descriptive details (identifying if no cloud save exists, session expiration, connection errors, or career breakdown).</li>
+        <li><b style="color:var(--text)">🔑 Permanent In-Place APK Updates:</b> Fixed keystore signing configuration so all updates install directly over existing versions without uninstallation.</li>
+        <li><b style="color:var(--text)">📥 One-Tap Cloud Restore:</b> Dedicated "Restore Cloud Save" and "Sync to Cloud" buttons in Settings > Account.</li>
         <li><b style="color:var(--text)">⟳ In-Game Screen Refresh:</b> Added instant topbar refresh buttons and reload utilities in Settings and Notices.</li>
         <li><b style="color:var(--text)">📜 Natural Vertical Scrolling:</b> Enabled smooth vertical overscroll gestures across game menus and career screens.</li>
       </ul>
@@ -4005,6 +4005,22 @@ function settingsScreen() {
     const cr = $("#cloudrestore"); if (cr) cr.onclick = () => { if (window.Cloud && Cloud.restoreCloudSave) Cloud.restoreCloudSave(); };
     const cs = $("#cloudsync"); if (cs) cs.onclick = () => { if (window.Cloud && Cloud.syncNow) Cloud.syncNow(); };
     const co = $("#cloudout"); if (co) co.onclick = () => { Cloud.signOut(); render(settingsScreen); };
+    if (window.Cloud && Cloud.enabled() && Cloud.signedIn() && Cloud.checkCloudStatus) {
+      Cloud.checkCloudStatus().then(info => {
+        const el = $("#cloudstatusval");
+        if (!el) return;
+        if (!info.ok) {
+          el.textContent = "Offline / Server Error";
+          el.style.color = "var(--warn)";
+        } else if (!info.found) {
+          el.textContent = "No save in cloud yet";
+          el.style.color = "var(--gold)";
+        } else {
+          el.textContent = "✅ " + info.summary;
+          el.style.color = "#7fd67f";
+        }
+      });
+    }
     const idRow = $("#pidrow");
     if (idRow) idRow.onclick = () => {
       idTaps++;
@@ -4041,6 +4057,7 @@ function settingsScreen() {
       <div class="kv" id="pidrow" style="cursor:pointer"><span>Player ID</span><b>${flPlayerId()}</b></div>
       ${window.Cloud && Cloud.enabled() ? (Cloud.signedIn()
         ? `<div class="kv"><span>\u2601\ufe0f Cloud</span><b style="color:#7fd67f">\u2705 ${Cloud.accountEmail()}</b></div>
+           <div class="kv" id="cloudstatusrow"><span>Cloud save info</span><b id="cloudstatusval" style="color:var(--sub);font-size:.82rem">checking...</b></div>
            <p class="sub">Saves sync automatically after matchdays. Tap below to manually restore your cloud career or backup now.</p>
            <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
              <button class="btn secondary" id="cloudrestore" style="flex:1">\ud83d\udce5 RESTORE CLOUD SAVE</button>
