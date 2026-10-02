@@ -132,28 +132,27 @@ var Cloud = (function () {
 
   function ensureSession() {
     if (!sb) return Promise.resolve(session);
-    return sb.auth.getSession().then(function (r) {
-      if (r && r.data && r.data.session) {
-        session = r.data.session;
-        var exp = session.expires_at || 0;
-        var now = Math.floor(Date.now() / 1000);
-        if (exp && exp < now + 120 && sb.auth.refreshSession) {
-          return sb.auth.refreshSession().then(function (ref) {
-            if (ref && ref.data && ref.data.session) session = ref.data.session;
-            return session;
-          }).catch(function () { return session; });
-        }
+    return sb.auth.getUser().then(function (res) {
+      if (res && res.data && res.data.user) {
+        return sb.auth.getSession().then(function (r) {
+          if (r && r.data && r.data.session) session = r.data.session;
+          return session;
+        });
       }
-      return session;
+      session = null;
+      return null;
     }).catch(function () {
-      return session;
+      return sb.auth.getSession().then(function (r) {
+        if (r && r.data && r.data.session) session = r.data.session;
+        return session;
+      }).catch(function () { return session; });
     });
   }
 
   function fn(name, body) { // call an edge function with the user's JWT
     return ensureSession().then(function (sess) {
       var token = (sess && sess.access_token) ? sess.access_token : "";
-      if (!token) throw new Error("No active auth token. Please sign out and sign back in.");
+      if (!token) throw new Error("session_expired");
       return fetch(FL_CLOUD_URL + "/functions/v1/" + name, {
         method: "POST",
         headers: {
@@ -324,6 +323,11 @@ var Cloud = (function () {
       var isOffline = (typeof navigator !== "undefined" && navigator.onLine === false);
       if (isOffline) {
         alert("📡 Device Offline\n\nYour device appears to be disconnected from the internet. Please connect and try again.");
+      } else if (msg === "session_expired" || /jwt|unauthenticated|token|expired/i.test(msg)) {
+        var email = accountEmail() || "Google account";
+        signOut();
+        alert("🔒 Google Sign-In Session Expired\n\nYour sign-in session for " + email + " has expired on this device.\n\nWe have reset the expired session. Please tap 'SIGN IN WITH GOOGLE' to sign back in.\n\n⚠️ IMPORTANT: If your career was saved under another Google account (e.g. speedymanspeed@gmail.com), be sure to select THAT Google account when signing in!");
+        if (typeof render === "function" && typeof settingsScreen === "function") render(settingsScreen);
       } else {
         alert("❌ Cloud Restore Error\n\nCould not restore cloud save.\n\nServer/Error Details:\n" + msg + "\n\n(Device Internet: Connected)\nIf this persists, try signing out and signing back in.");
       }
@@ -357,7 +361,10 @@ var Cloud = (function () {
             return false;
           }
           if (r.status === 401) {
-            alert("🔒 Session Expired\n\nYour sign-in session expired. Please sign out and sign in again.");
+            var email = accountEmail() || "Google account";
+            signOut();
+            alert("🔒 Google Sign-In Session Expired\n\nYour sign-in session for " + email + " has expired.\n\nPlease tap 'SIGN IN WITH GOOGLE' to reconnect.");
+            if (typeof render === "function" && typeof settingsScreen === "function") render(settingsScreen);
             return false;
           }
           if (r.status !== 200) {
@@ -381,6 +388,11 @@ var Cloud = (function () {
       var isOffline = (typeof navigator !== "undefined" && navigator.onLine === false);
       if (isOffline) {
         alert("📡 Device Offline\n\nYour device appears to be disconnected from the internet. Please connect and try again.");
+      } else if (msg === "session_expired" || /jwt|unauthenticated|token|expired/i.test(msg)) {
+        var email = accountEmail() || "Google account";
+        signOut();
+        alert("🔒 Google Sign-In Session Expired\n\nYour sign-in session for " + email + " has expired.\n\nPlease tap 'SIGN IN WITH GOOGLE' to reconnect.");
+        if (typeof render === "function" && typeof settingsScreen === "function") render(settingsScreen);
       } else {
         alert("❌ Cloud Sync Failed\n\nCould not upload career to cloud server.\n\nError details:\n" + msg + "\n\n(Device Internet: Connected)\nIf this persists, try signing out and signing in again.");
       }
