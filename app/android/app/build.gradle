@@ -19,7 +19,16 @@ android {
     def ksProps = new Properties()
     def ksFile = rootProject.file("keystore.properties")
     if (ksFile.exists()) { ksProps.load(new FileInputStream(ksFile)) }
+    def debugKs = file("debug.keystore")
     signingConfigs {
+        debug {
+            if (debugKs.exists()) {
+                storeFile debugKs
+                storePassword "android"
+                keyAlias "androiddebugkey"
+                keyPassword "android"
+            }
+        }
         release {
             if (ksFile.exists()) {
                 storeFile file(ksProps["storeFile"])
@@ -30,6 +39,11 @@ android {
         }
     }
     buildTypes {
+        debug {
+            if (debugKs.exists()) {
+                signingConfig signingConfigs.debug
+            }
+        }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'

@@ -3348,17 +3348,17 @@ function newsInboxScreen() {
           <span style="font-size:1.05rem">⟳</span>
           <span class="sub" style="font-size:.72rem">Refresh</span>
         </button>
-        <span class="badge gold" style="font-size:.72rem">v1.5 (Preview 11)</span>
+        <span class="badge gold" style="font-size:.72rem">v1.5 (Preview 12)</span>
       </div>
     </div>
     <div class="panel" style="border:1px solid var(--gold);background:rgba(255,215,94,.05)">
-      <div class="kv"><span style="color:var(--gold);font-weight:800;font-size:.9rem">⚡ WHAT'S NEW IN LATEST PATCH</span><span class="sub">Preview 11</span></div>
+      <div class="kv"><span style="color:var(--gold);font-weight:800;font-size:.9rem">⚡ WHAT'S NEW IN LATEST PATCH</span><span class="sub">Preview 12</span></div>
       <ul style="margin:8px 0 0;padding-left:18px;line-height:1.5;font-size:.82rem;color:var(--sub)">
+        <li><b style="color:var(--text)">🔑 Seamless In-Place Updates:</b> Fixed signing key configuration with a permanent keystore so future builds install directly over existing versions without requiring uninstallation.</li>
         <li><b style="color:var(--text)">📥 One-Tap Cloud Restore:</b> Dedicated "Restore Cloud Save" and "Sync to Cloud" buttons in Settings > Account — restoring your career across devices without requiring backup codes.</li>
         <li><b style="color:var(--text)">🛡️ Intelligent Reinstall Recovery:</b> Automatically detects and offers to restore your existing cloud career on fresh installs and device upgrades.</li>
         <li><b style="color:var(--text)">⟳ In-Game Screen Refresh:</b> Added instant topbar refresh buttons and reload utilities in Settings and Notices.</li>
         <li><b style="color:var(--text)">📜 Natural Vertical Scrolling:</b> Enabled smooth vertical overscroll gestures across game menus and career screens.</li>
-        <li><b style="color:var(--text)">👻 Ghost PvP & Global Rankings:</b> Asynchronous real player challenges with monthly seasonal leaderboard rewards.</li>
       </ul>
     </div>
     <div class="panel"><h2>📢 Server Announcements</h2>

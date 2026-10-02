@@ -114,6 +114,13 @@ jobs:
       - name: Sync Game into Capacitor Android project
         run: npm run sync
 
+      # Ensure fixed debug keystore is used so builds install over previous ones
+      - name: Setup stable debug signing key
+        run: |
+          mkdir -p ~/.android
+          cp app/android/app/debug.keystore ~/.android/debug.keystore
+          echo "Stable debug keystore installed in ~/.android/debug.keystore"
+
       - name: Build APK locally on the runner
         run: |
           cd app/android
@@ -130,6 +137,11 @@ jobs:
           cmp .verify-tmp/apk-app.js game/app.js
           echo "Verification passed: packaged app.js is byte-identical to game/app.js"
           rm -rf .verify-tmp
+
+      # Verify APK is signed with the stable debug key
+      - name: Verify APK signature fingerprint
+        run: |
+          keytool -printcert -jarfile football-legend.apk | grep -E "Owner|SHA256"
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v7
