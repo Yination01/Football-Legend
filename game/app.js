@@ -3978,8 +3978,13 @@ function settingsScreen() {
       } catch (e) { toast("\u274c Invalid backup code"); }
     };
     $("#setback").onclick = () => render(menuScreen);
+    const rf = $("#topsetrefresh"); if (rf) rf.onclick = () => { render(settingsScreen); toast("Settings refreshed"); };
+    const pgr = $("#pgrefresh"); if (pgr) pgr.onclick = () => { render(settingsScreen); toast("Page refreshed"); };
+    const pgl = $("#pgreload"); if (pgl) pgl.onclick = () => { location.reload(); };
     let idTaps = 0;
     const ci = $("#cloudin"); if (ci) ci.onclick = () => Cloud.signIn();
+    const cr = $("#cloudrestore"); if (cr) cr.onclick = () => { if (window.Cloud && Cloud.restoreCloudSave) Cloud.restoreCloudSave(); };
+    const cs = $("#cloudsync"); if (cs) cs.onclick = () => { if (window.Cloud && Cloud.syncNow) Cloud.syncNow(); };
     const co = $("#cloudout"); if (co) co.onclick = () => { Cloud.signOut(); render(settingsScreen); };
     const idRow = $("#pidrow");
     if (idRow) idRow.onclick = () => {
@@ -4004,15 +4009,25 @@ function settingsScreen() {
   }, 0);
   const kb = (x) => Math.round((x || "").length / 1024 * 10) / 10;
   return `<div class="screen">
-    <div class="topbar"><div class="logo"><span class="brand1">SETTINGS</span> <span class="legend">& BACKUP</span></div></div>
+    <div class="topbar">
+      <div class="logo"><span class="brand1">SETTINGS</span> <span class="legend">& BACKUP</span></div>
+      <button class="chip" id="topsetrefresh" style="cursor:pointer;background:var(--panel);border:1px solid var(--line);color:var(--text);display:flex;align-items:center;gap:6px">
+        <span style="font-size:1.05rem">⟳</span>
+        <span class="sub" style="font-size:.72rem">Refresh</span>
+      </button>
+    </div>
     <div class="panel"><h2>\u2699\ufe0f Settings</h2>
       </div>
     <div class="panel"><h2>\ud83d\udc64 Account</h2>
       <div class="kv" id="pidrow" style="cursor:pointer"><span>Player ID</span><b>${flPlayerId()}</b></div>
       ${window.Cloud && Cloud.enabled() ? (Cloud.signedIn()
         ? `<div class="kv"><span>\u2601\ufe0f Cloud</span><b style="color:#7fd67f">\u2705 ${Cloud.accountEmail()}</b></div>
-           <p class="sub">Saves sync automatically after matchdays. Sign in on any device to restore.</p>
-           <button class="btn secondary" id="cloudout">SIGN OUT</button>`
+           <p class="sub">Saves sync automatically after matchdays. Tap below to manually restore your cloud career or backup now.</p>
+           <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
+             <button class="btn secondary" id="cloudrestore" style="flex:1">\ud83d\udce5 RESTORE CLOUD SAVE</button>
+             <button class="btn secondary" id="cloudsync" style="flex:1">\u2601\ufe0f SYNC TO CLOUD</button>
+           </div>
+           <button class="btn secondary" id="cloudout" style="margin-top:8px">SIGN OUT</button>`
         : `<div class="kv"><span>\u2601\ufe0f Cloud</span><b style="color:#caa">not connected</b></div>
            <p class="sub">Optional: connect Google to back up your careers online and play across devices. The game works fully offline without it.</p>
            <button class="btn" id="cloudin">\ud83d\udd11 SIGN IN WITH GOOGLE</button>`)
@@ -4021,8 +4036,10 @@ function settingsScreen() {
       <div class="kv"><span>\ud83c\udfc6 ML club</span><b>${mlS ? (mlS.clubName || "founded") + " \u00b7 " + mlSeasons + " seasons \u00b7 " + mlTrophies + " trophies" : "\u2014"}</b></div>
       <div class="kv"><span>\ud83d\udcbe Backup protection</span><b>${window.Capacitor ? "\u2705 Auto (file + Android)" : "\u26a0\ufe0f Browser \u2014 use backup codes"}</b></div>
     </div>
-    <div class="panel"><h2>\u2699\ufe0f Preferences</h2>
-    <div class="kv"><span>\ud83d\udd0a Sound (crowd, whistle, goals)</span><button class="btn secondary" id="tgsnd">${st.sound !== false ? "ON" : "OFF"}</button></div>
+    <div class="panel"><h2>\u2699\ufe0f Preferences & Utilities</h2>
+      <div class="kv"><span>\u27f3 Refresh screen</span><button class="btn secondary" id="pgrefresh">REFRESH</button></div>
+      <div class="kv"><span>\ud83d\udd04 Reload application</span><button class="btn secondary" id="pgreload">RELOAD</button></div>
+      <div class="kv"><span>\ud83d\udd0a Sound (crowd, whistle, goals)</span><button class="btn secondary" id="tgsnd">${st.sound !== false ? "ON" : "OFF"}</button></div>
       <div class="kv"><span>\ud83e\ude7a Error log (${(() => { try { return JSON.parse(localStorage.getItem("flErrLog") || "[]").length; } catch (e) { return 0; } })()} entries)</span><span><button class="btn secondary" id="errcopy">COPY</button> <button class="btn secondary" id="errclear">CLEAR</button></span></div>
       <p class="sub">If something breaks, tap COPY and send the text to the developer.</p>
       <div class="kv"><span>\ud83c\udfac 3D cutscenes</span><button class="btn secondary" id="tgcut">${st.cutscenes !== false ? "ON" : "OFF"}</button></div>

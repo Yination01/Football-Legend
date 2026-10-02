@@ -339,7 +339,7 @@ canvas#live2d {
 
 /* ---- Mobile app polish ---- */
 html { touch-action: manipulation; }
-body { user-select: none; -webkit-user-select: none; overscroll-behavior: none; }
+body { user-select: none; -webkit-user-select: none; overscroll-behavior-y: auto; overscroll-behavior-x: none; }
 input, textarea { user-select: text; -webkit-user-select: text; font-size: 16px !important; }
 .btn, .navbtn, .nav button, .opt, .tile { min-height: 44px; }
 .nav button { padding: 8px 4px 10px; }

@@ -11,6 +11,8 @@ var ML_CLOUD_KEY = "footballLegendML_v1";
 var Cloud = (function () {
   var sb = null;            // supabase client
   var session = null;       // current auth session
+  var admin = false;        // server-confirmed membership in public.admins
+  var authCallbackBusy = false;
   var lastSync = { bal: 0, ml: 0 };
   var SYNC_COOLDOWN = 90 * 1000; // min ms between pushes per mode (quota safety)
 
@@ -21,20 +23,17 @@ var Cloud = (function () {
     if (!enabled()) return false;
     if (!sb) {
       sb = window.supabase.createClient(FL_CLOUD_URL, FL_CLOUD_ANON, { auth: { flowType: "pkce", detectSessionInUrl: true } });
-      // Native app: OAuth must run in the system browser (Google blocks WebViews); deep link returns here
+      // Native app: OAuth must run in the system browser (Google blocks WebViews).
+      // Handle both a warm return and a cold start caused by the callback.
       if (window.Capacitor && Capacitor.Plugins && Capacitor.Plugins.App) {
         Capacitor.Plugins.App.addListener("appUrlOpen", function (ev) {
-          var u = ev && ev.url ? ev.url : "";
-          if (u.indexOf("://callback") !== -1 && u.indexOf("code=") !== -1) {
-            var code = (u.split("code=")[1] || "").split("&")[0];
-            try { code = decodeURIComponent(code); } catch (_) {}
-            sb.auth.exchangeCodeForSession(code).then(function (r) {
-              if (r && r.error) throw r.error;
-              if (Capacitor.Plugins.Browser) Capacitor.Plugins.Browser.close().catch(function () {});
-              toast("\u2705 Signed in! Your cloud career is being restored.");
-            }).catch(function (err) { toast("Sign-in failed: " + authError(err)); });
-          }
+          processAuthUrl(ev && ev.url);
         });
+        if (Capacitor.Plugins.App.getLaunchUrl) {
+          Capacitor.Plugins.App.getLaunchUrl().then(function (r) {
+            if (r && r.url) processAuthUrl(r.url);
+          }).catch(function () {});
+        }
       }
       sb.auth.onAuthStateChange(function (_ev, s) {
         session = s;
@@ -53,6 +52,25 @@ var Cloud = (function () {
       });
     }
     return true;
+  }
+
+  function processAuthUrl(rawUrl) {
+    if (!rawUrl || authCallbackBusy || !sb) return;
+    var u;
+    try { u = new URL(rawUrl); } catch (_) { toast("Google sign-in returned an invalid callback."); return; }
+    if (u.protocol !== "com.footballlegend.game:" || u.hostname !== "callback") return;
+    var oauthError = u.searchParams.get("error_description") || u.searchParams.get("error");
+    if (oauthError) { toast("Google sign-in failed: " + authError({ message: oauthError })); return; }
+    var code = u.searchParams.get("code");
+    if (!code) { toast("Google sign-in returned without an authorization code."); return; }
+    authCallbackBusy = true;
+    sb.auth.exchangeCodeForSession(code).then(function (r) {
+      if (r && r.error) throw r.error;
+      if (Capacitor.Plugins && Capacitor.Plugins.Browser) Capacitor.Plugins.Browser.close().catch(function () {});
+      toast("\u2705 Signed in! Your cloud career is being restored.");
+    }).catch(function (err) {
+      toast("Sign-in failed: " + authError(err));
+    }).then(function () { authCallbackBusy = false; });
   }
 
   function authError(err) {
@@ -90,6 +108,11 @@ var Cloud = (function () {
   function signOut() {
     if (sb) sb.auth.signOut();
     session = null;
+    admin = false;
+    if (typeof getSet === "function" && typeof setSet === "function" && getSet().ownerSource === "admin") {
+      setSet("ownerMode", false);
+      setSet("ownerSource", null);
+    }
     toast("Signed out \u2014 game continues offline");
   }
 
@@ -105,7 +128,22 @@ var Cloud = (function () {
     }).then(function (r) { return r.json().then(function (j) { return { status: r.status, body: j }; }); });
   }
 
+  function checkAdmin() {
+    if (!signedIn() || !sb) return Promise.resolve(false);
+    return sb.from("admins").select("uid").eq("uid", session.user.id).maybeSingle().then(function (r) {
+      admin = !r.error && !!r.data;
+      if (admin && typeof setSet === "function") {
+        setSet("ownerMode", true);
+        setSet("ownerSource", "admin");
+        if (typeof render === "function" && typeof menuScreen === "function") render(menuScreen);
+      }
+      return admin;
+    }).catch(function () { admin = false; return false; });
+  }
+
   function onSignedIn() {
+    // Server-confirmed admins receive the in-app owner surface automatically.
+    checkAdmin();
     // register (idempotent) then pull cloud state
     fn("sync-save", { mode: "register", playerId: flPlayerId(), name: (S && S.name) || "Legend" })
       .then(function () { return fn("sync-save", { mode: "pull" }); })
@@ -129,30 +167,95 @@ var Cloud = (function () {
         toast("\ud83c\udf81 " + ids.length + " cloud gift" + (ids.length > 1 ? "s" : "") + " delivered!");
       }
     }
-    // 2) newer cloud save -> offer restore (never silently overwrite local)
+    // 2) cloud save found -> offer restore (never silently overwrite local)
     var sv = data && data.save;
-    if (sv && sv.bal_save && sv.bal_updated) {
-      var localSeason = (S && !S.retired) ? (S.season * 100 + S.matchday) : -1;
-      var cloudSeason = sv.bal_save.season * 100 + (sv.bal_save.matchday || 0);
-      if (cloudSeason > localSeason) {
-        if (confirm("A newer cloud save was found (Season " + sv.bal_save.season + "). Restore it on this device?")) {
-          S = sv.bal_save; save(); location.reload();
+    if (sv && (sv.bal_save || sv.ml_save)) {
+      var localSeason = (window.S && !S.retired) ? (S.season * 100 + (S.matchday || 0)) : -1;
+      var cloudSeason = sv.bal_save ? (sv.bal_save.season * 100 + (sv.bal_save.matchday || 0)) : -1;
+      var isFreshLocal = !window.S || S.retired || (S.season === 1 && (S.matchday || 0) <= 2);
+      if (cloudSeason > localSeason || isFreshLocal) {
+        var balName = sv.bal_save ? sv.bal_save.name : "Player";
+        var balSeason = sv.bal_save ? sv.bal_save.season : 1;
+        var msg = "\u2601\ufe0f Cloud save found: " + balName + " (Season " + balSeason + ").\n\nRestore this career on this device?";
+        if (confirm(msg)) {
+          if (sv.bal_save) {
+            window.S = sv.bal_save;
+            if (typeof save === "function") save();
+            else localStorage.setItem(SAVE_KEY, JSON.stringify(sv.bal_save));
+            if (window.flMirror) flMirror(SAVE_KEY, JSON.stringify(sv.bal_save));
+          }
+          if (sv.ml_save) {
+            localStorage.setItem(ML_CLOUD_KEY, JSON.stringify(sv.ml_save));
+            if (window.flMirror) flMirror(ML_CLOUD_KEY, JSON.stringify(sv.ml_save));
+          }
+          toast("\u2705 Cloud career restored! Reloading...");
+          setTimeout(function () { location.reload(); }, 600);
           return;
         }
       }
     }
-    if (sv && sv.ml_save && sv.ml_updated && window.ML) {
-      try {
-        var localM = JSON.parse(localStorage.getItem(ML_CLOUD_KEY) || "null");
-        var lms = localM ? localM.season * 100 + (localM.matchday || 0) : -1;
-        var cms = sv.ml_save.season * 100 + (sv.ml_save.matchday || 0);
-        if (cms > lms && confirm("Newer Master League cloud save found (Season " + sv.ml_save.season + "). Restore?")) {
-          localStorage.setItem(ML_CLOUD_KEY, JSON.stringify(sv.ml_save));
-          if (window.flMirror) flMirror(ML_CLOUD_KEY, JSON.stringify(sv.ml_save));
-          location.reload();
+  }
+
+  function restoreCloudSave() {
+    if (!signedIn()) { toast("Please sign in first"); return Promise.resolve(false); }
+    toast("Checking cloud save...");
+    return fn("sync-save", { mode: "pull" }).then(function (r) {
+      if (r.status !== 200) {
+        toast((r.body && r.body.error) || "Could not reach cloud");
+        return false;
+      }
+      var sv = r.body && r.body.save;
+      if (!sv || (!sv.bal_save && !sv.ml_save)) {
+        toast("No cloud save found for this account");
+        return false;
+      }
+      var bal = sv.bal_save;
+      var ml = sv.ml_save;
+      var parts = [];
+      if (bal) parts.push("BaL: " + bal.name + " (Season " + bal.season + ")");
+      if (ml) parts.push("ML: " + (ml.clubName || "Club") + " (Season " + ml.season + ")");
+      var msg = "\u2601\ufe0f Cloud save found:\n" + parts.join("\n") + "\n\nRestore this to your device? Current local progress will be replaced.";
+      if (confirm(msg)) {
+        if (bal) {
+          window.S = bal;
+          if (typeof save === "function") save();
+          else localStorage.setItem(SAVE_KEY, JSON.stringify(bal));
+          if (window.flMirror) flMirror(SAVE_KEY, JSON.stringify(bal));
         }
-      } catch (e) {}
-    }
+        if (ml) {
+          localStorage.setItem(ML_CLOUD_KEY, JSON.stringify(ml));
+          if (window.flMirror) flMirror(ML_CLOUD_KEY, JSON.stringify(ml));
+        }
+        toast("\u2705 Cloud save restored! Reloading...");
+        setTimeout(function () { location.reload(); }, 600);
+        return true;
+      }
+      return false;
+    }).catch(function (err) {
+      toast("Restore failed: " + ((err && err.message) || "network error"));
+      return false;
+    });
+  }
+
+  function syncNow() {
+    if (!signedIn()) { toast("Please sign in first"); return Promise.resolve(false); }
+    toast("Syncing to cloud...");
+    var balPayload = (window.S && !S.retired) ? S : null;
+    var mlPayload = null;
+    try { mlPayload = JSON.parse(localStorage.getItem(ML_CLOUD_KEY) || "null"); } catch (e) {}
+    if (!balPayload && !mlPayload) { toast("No active career to upload"); return Promise.resolve(false); }
+    var promises = [];
+    if (balPayload) promises.push(fn("sync-save", { mode: "bal", save: balPayload }));
+    if (mlPayload) promises.push(fn("sync-save", { mode: "ml", save: mlPayload }));
+    return Promise.all(promises).then(function () {
+      toast("\u2705 Careers backed up to cloud!");
+      lastSync.bal = Date.now();
+      lastSync.ml = Date.now();
+      return true;
+    }).catch(function () {
+      toast("Sync failed. Check connection.");
+      return false;
+    });
   }
 
   function push(mode) { // called after matchdays / season ends; silent, throttled
@@ -262,13 +365,15 @@ var Cloud = (function () {
   }
 
   function accountEmail() { return signedIn() ? (session.user.email || "Google account") : null; }
+  function isAdmin() { return admin; }
 
   return { init: init, enabled: enabled, signedIn: signedIn, signIn: signIn, signOut: signOut,
            push: push, redeemOnline: redeemOnline, fetchEvents: fetchEvents,
            fetchBroadcast: fetchBroadcast, fetchBroadcasts: fetchBroadcasts,
            fetchLeaderboard: fetchLeaderboard, fetchGhosts: fetchGhosts,
            fetchSeasonBoard: fetchSeasonBoard, fetchSeasons: fetchSeasons,
-           verifyOwner: verifyOwner, accountEmail: accountEmail };
+           verifyOwner: verifyOwner, checkAdmin: checkAdmin, isAdmin: isAdmin,
+           accountEmail: accountEmail, restoreCloudSave: restoreCloudSave, syncNow: syncNow };
 })();
 
 // boot: harmless when unconfigured

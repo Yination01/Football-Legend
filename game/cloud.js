@@ -167,30 +167,95 @@ var Cloud = (function () {
         toast("\ud83c\udf81 " + ids.length + " cloud gift" + (ids.length > 1 ? "s" : "") + " delivered!");
       }
     }
-    // 2) newer cloud save -> offer restore (never silently overwrite local)
+    // 2) cloud save found -> offer restore (never silently overwrite local)
     var sv = data && data.save;
-    if (sv && sv.bal_save && sv.bal_updated) {
-      var localSeason = (S && !S.retired) ? (S.season * 100 + S.matchday) : -1;
-      var cloudSeason = sv.bal_save.season * 100 + (sv.bal_save.matchday || 0);
-      if (cloudSeason > localSeason) {
-        if (confirm("A newer cloud save was found (Season " + sv.bal_save.season + "). Restore it on this device?")) {
-          S = sv.bal_save; save(); location.reload();
+    if (sv && (sv.bal_save || sv.ml_save)) {
+      var localSeason = (window.S && !S.retired) ? (S.season * 100 + (S.matchday || 0)) : -1;
+      var cloudSeason = sv.bal_save ? (sv.bal_save.season * 100 + (sv.bal_save.matchday || 0)) : -1;
+      var isFreshLocal = !window.S || S.retired || (S.season === 1 && (S.matchday || 0) <= 2);
+      if (cloudSeason > localSeason || isFreshLocal) {
+        var balName = sv.bal_save ? sv.bal_save.name : "Player";
+        var balSeason = sv.bal_save ? sv.bal_save.season : 1;
+        var msg = "\u2601\ufe0f Cloud save found: " + balName + " (Season " + balSeason + ").\n\nRestore this career on this device?";
+        if (confirm(msg)) {
+          if (sv.bal_save) {
+            window.S = sv.bal_save;
+            if (typeof save === "function") save();
+            else localStorage.setItem(SAVE_KEY, JSON.stringify(sv.bal_save));
+            if (window.flMirror) flMirror(SAVE_KEY, JSON.stringify(sv.bal_save));
+          }
+          if (sv.ml_save) {
+            localStorage.setItem(ML_CLOUD_KEY, JSON.stringify(sv.ml_save));
+            if (window.flMirror) flMirror(ML_CLOUD_KEY, JSON.stringify(sv.ml_save));
+          }
+          toast("\u2705 Cloud career restored! Reloading...");
+          setTimeout(function () { location.reload(); }, 600);
           return;
         }
       }
     }
-    if (sv && sv.ml_save && sv.ml_updated && window.ML) {
-      try {
-        var localM = JSON.parse(localStorage.getItem(ML_CLOUD_KEY) || "null");
-        var lms = localM ? localM.season * 100 + (localM.matchday || 0) : -1;
-        var cms = sv.ml_save.season * 100 + (sv.ml_save.matchday || 0);
-        if (cms > lms && confirm("Newer Master League cloud save found (Season " + sv.ml_save.season + "). Restore?")) {
-          localStorage.setItem(ML_CLOUD_KEY, JSON.stringify(sv.ml_save));
-          if (window.flMirror) flMirror(ML_CLOUD_KEY, JSON.stringify(sv.ml_save));
-          location.reload();
+  }
+
+  function restoreCloudSave() {
+    if (!signedIn()) { toast("Please sign in first"); return Promise.resolve(false); }
+    toast("Checking cloud save...");
+    return fn("sync-save", { mode: "pull" }).then(function (r) {
+      if (r.status !== 200) {
+        toast((r.body && r.body.error) || "Could not reach cloud");
+        return false;
+      }
+      var sv = r.body && r.body.save;
+      if (!sv || (!sv.bal_save && !sv.ml_save)) {
+        toast("No cloud save found for this account");
+        return false;
+      }
+      var bal = sv.bal_save;
+      var ml = sv.ml_save;
+      var parts = [];
+      if (bal) parts.push("BaL: " + bal.name + " (Season " + bal.season + ")");
+      if (ml) parts.push("ML: " + (ml.clubName || "Club") + " (Season " + ml.season + ")");
+      var msg = "\u2601\ufe0f Cloud save found:\n" + parts.join("\n") + "\n\nRestore this to your device? Current local progress will be replaced.";
+      if (confirm(msg)) {
+        if (bal) {
+          window.S = bal;
+          if (typeof save === "function") save();
+          else localStorage.setItem(SAVE_KEY, JSON.stringify(bal));
+          if (window.flMirror) flMirror(SAVE_KEY, JSON.stringify(bal));
         }
-      } catch (e) {}
-    }
+        if (ml) {
+          localStorage.setItem(ML_CLOUD_KEY, JSON.stringify(ml));
+          if (window.flMirror) flMirror(ML_CLOUD_KEY, JSON.stringify(ml));
+        }
+        toast("\u2705 Cloud save restored! Reloading...");
+        setTimeout(function () { location.reload(); }, 600);
+        return true;
+      }
+      return false;
+    }).catch(function (err) {
+      toast("Restore failed: " + ((err && err.message) || "network error"));
+      return false;
+    });
+  }
+
+  function syncNow() {
+    if (!signedIn()) { toast("Please sign in first"); return Promise.resolve(false); }
+    toast("Syncing to cloud...");
+    var balPayload = (window.S && !S.retired) ? S : null;
+    var mlPayload = null;
+    try { mlPayload = JSON.parse(localStorage.getItem(ML_CLOUD_KEY) || "null"); } catch (e) {}
+    if (!balPayload && !mlPayload) { toast("No active career to upload"); return Promise.resolve(false); }
+    var promises = [];
+    if (balPayload) promises.push(fn("sync-save", { mode: "bal", save: balPayload }));
+    if (mlPayload) promises.push(fn("sync-save", { mode: "ml", save: mlPayload }));
+    return Promise.all(promises).then(function () {
+      toast("\u2705 Careers backed up to cloud!");
+      lastSync.bal = Date.now();
+      lastSync.ml = Date.now();
+      return true;
+    }).catch(function () {
+      toast("Sync failed. Check connection.");
+      return false;
+    });
   }
 
   function push(mode) { // called after matchdays / season ends; silent, throttled
@@ -308,7 +373,7 @@ var Cloud = (function () {
            fetchLeaderboard: fetchLeaderboard, fetchGhosts: fetchGhosts,
            fetchSeasonBoard: fetchSeasonBoard, fetchSeasons: fetchSeasons,
            verifyOwner: verifyOwner, checkAdmin: checkAdmin, isAdmin: isAdmin,
-           accountEmail: accountEmail };
+           accountEmail: accountEmail, restoreCloudSave: restoreCloudSave, syncNow: syncNow };
 })();
 
 // boot: harmless when unconfigured
