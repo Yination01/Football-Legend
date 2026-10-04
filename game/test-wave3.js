@@ -146,7 +146,7 @@ check('#17 season stats reset after the gala is recorded', mlSrcRaw.indexOf('p.a
 
 /* ---- headless drive: a full ML season really produces a gala with real names ---- */
 {
-  mlNewSave('britain', 'Gala FC');
+  mlNewSave('britain', 'Gala FC', 'ml_test_gala');   // pinned world: no clock-dependent flake
   M.seed = 777;
   let guard = 0;
   while ((M.matchday < 18 || mlCupPending() || mlCtFixture()) && guard++ < 300) {
@@ -213,7 +213,7 @@ check('#17 season stats reset after the gala is recorded', mlSrcRaw.indexOf('p.a
 }
 {
   // the strong invariant: after a full season the ledger must explain every GP/LC change
-  mlNewSave('britain', 'Ledger FC');
+  mlNewSave('britain', 'Ledger FC', 'ml_test_ledger');
   M.seed = 4242; M.welcomeClaimed = true;
   const gp0 = M.budget, lc0 = M.lc || 0;
   let guard = 0;
@@ -248,7 +248,7 @@ check('#17 season stats reset after the gala is recorded', mlSrcRaw.indexOf('p.a
   check('#12 the hub screen shows every level price and effect',
     mlSrcRaw.indexOf('function mlInfraScreen()') >= 0 && mlSrcRaw.indexOf('UPGRADE ') >= 0 && mlSrcRaw.indexOf('data-infra="${tree}"') >= 0 && mlSrcRaw.indexOf('E.ECON.infraCost(tree, lvl)') >= 0);
   // real effects, measured
-  mlNewSave('britain', 'Infra FC');
+  mlNewSave('britain', 'Infra FC', 'ml_test_infra');
   M.welcomeClaimed = true;
   const p = M.squad[0];
   const need0 = mlExpNeed(p);
@@ -272,7 +272,7 @@ check('#17 season stats reset after the gala is recorded', mlSrcRaw.indexOf('p.a
 
 /* ============================== #13 club dossier ============================== */
 {
-  mlNewSave('britain', 'Dossier FC');
+  mlNewSave('britain', 'Dossier FC', 'ml_test_dossier');
   M.welcomeClaimed = true;
   mlEnsureInfra();
   M.infra.staff = 0;
@@ -317,7 +317,7 @@ check('#17 season stats reset after the gala is recorded', mlSrcRaw.indexOf('p.a
   check('#15 checkpoint rewards scale with division and always pay something',
     D.reward(1, true).gp > D.reward(10, true).gp && D.reward(1, true).lc > D.reward(10, true).lc && D.reward(10, false).gp > 0);
 
-  mlNewSave('britain', 'Ladder FC');
+  mlNewSave('britain', 'Ladder FC', 'ml_test_ladder');
   M.welcomeClaimed = true;
   mlDivEnsure();
   const loan = mlDivLoanXI();

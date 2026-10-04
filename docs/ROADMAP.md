@@ -19,6 +19,12 @@
   - **Leaderboard seasons** — monthly snapshots + auto-gifts for top 3 (admin "Close season").
   - Fixed `app/copy-game.js` source path (`../game`).
 
+- **v1.6 (in code, unreleased) — Master Plan Wave 4 (final):**
+  - **#18 Supabase RLS fix + auto-sync** — the `profiles` owner-update policy no longer references its own table (it raised `42P17 infinite recursion`, so every owner profile write failed); anon/authenticated are **select-only at the privilege level** (writes only through the validated `sync-save`/service-role path), and the migration ships the two verification queries the owner runs.
+  - **Auto-push after every finished match** — debounced into one upload per match, queued in `localStorage` when offline or when the app is killed, retried with bounded backoff, flushed on the next session / sign-in / coming back online / leaving the app. The queue holds modes + timestamps only, never a copy of a save.
+  - BaL and ML match finishes mark their own mode; nothing new to deploy beyond the SQL.
+  - New suite `game/test-wave4.js` (49 checks: SQL contracts + a headless cloud harness with a virtual clock and scriptable fetch).
+
 - **v1.6 (in code, unreleased) — Master Plan Wave 3:**
   - **#6 Multi-week training engine** — published formula `ΔXP = 60 × ageCurve × headroom × coach × minutes`; every skill has a real week cost with a live ETA, and injuries pause the plan instead of eating weeks.
   - **#9 AUTO vs MAX training plans** — balanced spread vs archetype OVR push on the same XP budget, with projected OVR previewed before you commit (BaL and ML).

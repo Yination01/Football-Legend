@@ -230,8 +230,10 @@ function mlGenSquad(rng, region, str) {
   mk("GK", 2, -4, 3); mk("DF", 6, -5, 5); mk("MF", 6, -5, 5); mk("FW", 4, -5, 6);
   return sq;
 }
-function mlNewSave(region, clubName) {
-  const seed = "ml_" + Date.now().toString(36);
+function mlNewSave(region, clubName, seedOpt) {
+  // seedOpt keeps a career reproducible (used by the test harness); the game always passes none,
+  // so a real save is still created fresh from the clock.
+  const seed = seedOpt || ("ml_" + Date.now().toString(36));
   const galaxy = E.makeGalaxy(seed);
   const leagueIdx = E.leagueForRegion(region);
   const world = { tier: 0, clubs: galaxy.leagues[leagueIdx].clubs, fixtures: galaxy.leagues[leagueIdx].fixtures, h2h: {} };
@@ -2185,6 +2187,8 @@ function mlFinish(fx, r, probs) {
   }
   mlNews((fx.cup ? "\ud83c\udfc6 " : "") + `${res === "W" ? "WIN" : res === "D" ? "DRAW" : "LOSS"} ${myG}-${opG} vs ${M.world.clubs[meHome ? fx.away : fx.home].short}. Net +${fmtM(prize)} (gate receipts covered ${fmtM(wages)} wages).`);
   mlSave();
+  // #18: a finished match is the sync unit - mark the mode dirty and let Cloud batch the upload
+  if (window.Cloud && Cloud.autoSync) { try { Cloud.autoSync("ml"); } catch (e) {} }
   render(() => `<div class="screen">${mlTopbar()}
     <div class="panel center">
       <h1>${res === "W" ? "\ud83c\udf89 VICTORY" : res === "D" ? "\ud83e\udd1d DRAW" : "\ud83d\ude24 DEFEAT"}</h1>

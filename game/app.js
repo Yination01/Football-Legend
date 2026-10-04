@@ -2842,6 +2842,8 @@ function finishMatch(fx, result, displayedProbs) {
   if (t[0]) pushNews(`📊 ${t[0].name} ${t[0].i === S.clubIdx ? "— YOUR club —" : ""} top the table with ${t[0].Pts} pts.`);
 
   save();
+  // #18: a finished match is the sync unit - mark the mode dirty and let Cloud batch the upload
+  if (window.Cloud && Cloud.autoSync) { try { Cloud.autoSync("bal"); } catch (e) {} }
 
   render(() => {
     setTimeout(() => { $("#cont").onclick = () => render(homeScreen); }, 0);

@@ -25,6 +25,7 @@
     "build:release": "./scripts/build-release.sh",
     "test:v16": "node game/test-v16.js",
     "test:wave2": "node game/test-wave2.js",
-    "test:wave3": "node game/test-wave3.js"
+    "test:wave3": "node game/test-wave3.js",
+    "test:wave4": "node game/test-wave4.js"
   }
 }

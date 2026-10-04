@@ -67,3 +67,20 @@ The SQL Editor runs as postgres and **bypasses RLS**, so the first grant must be
 2. Deploy edge function **`verify-owner`** from `functions/verify-owner/index.ts` (same dashboard-editor flow as step 4).
 3. Edge Function secrets → add `OWNER_KEY_HASH` = decimal string of `hashSeed("flown:"+yourKey)` (legacy default `1728818593` if unset).
 4. Admin console → **Seasons** tab appears after you reload; use it at month-end to snapshot boards + auto-gift top 3.
+
+## 8. v1.6 Wave 4 — RLS fix + auto-sync (#18)
+
+1. **Run `wave4-rls-fix.sql`** (SQL Editor, paste ALL -> Run). It is idempotent and:
+   - repairs the `profiles` owner-update policy, which recursed (42P17) and broke every owner
+     profile write (display name / `last_seen`);
+   - revokes INSERT/UPDATE/DELETE from `anon` + `authenticated` on every public table (and by
+     default for future tables), leaving `select` only — all writes go through `sync-save` /
+     `redeem-code` / `verify-owner` with the service role;
+   - revokes `bump_stat` execute from players (it is an internal counter).
+2. Run the two verification queries at the bottom of that file: **both must return zero rows.**
+3. Nothing else to deploy: auto-sync lives in the client (`game/cloud.js`). Once a player is signed
+   in, every finished match queues its mode and the app uploads it silently — debounced, retried
+   after network drops, and flushed on next launch if the app closed with something pending.
+4. Screen readers of this file: redirect URLs already listed in step 3 of the master plan owner
+   tasks (`https://yination01.github.io/Football-Legend/game/`, `com.footballlegend.game://callback`).
+

@@ -14,7 +14,6 @@ var Cloud = (function () {
   var admin = false;        // server-confirmed membership in public.admins
   var authCallbackBusy = false;
   var lastSync = { bal: 0, ml: 0 };
-  var SYNC_COOLDOWN = 90 * 1000; // min ms between pushes per mode (quota safety)
 
   function enabled() { return !!(FL_CLOUD_URL && FL_CLOUD_ANON && window.supabase); }
   function signedIn() { return !!(session && session.user); }
@@ -184,6 +183,7 @@ var Cloud = (function () {
   }
 
   function onSignedIn() {
+    autoSchedule(0); // #18: a career saved offline uploads as soon as sign-in lands
     // Server-confirmed admins receive the in-app owner surface automatically.
     checkAdmin();
     // register (idempotent) then pull cloud state
@@ -379,6 +379,9 @@ var Cloud = (function () {
         }
         lastSync.bal = Date.now();
         lastSync.ml = Date.now();
+        if (balPayload) { auto.bal = 0; auto.lastPush.bal = Date.now(); }
+        if (mlPayload) { auto.ml = 0; auto.lastPush.ml = Date.now(); }
+        autoPersist();
         var email = accountEmail() || "Google account";
         var items = [];
         if (balPayload) items.push("BaL: " + balPayload.name + " (Season " + balPayload.season + ")");
@@ -404,18 +407,113 @@ var Cloud = (function () {
     });
   }
 
-  function push(mode) { // called after matchdays / season ends; silent, throttled
-    if (!signedIn()) return;
-    var now = Date.now();
-    if (now - lastSync[mode] < SYNC_COOLDOWN) return;
-    lastSync[mode] = now;
-    var payload = null;
-    if (mode === "bal" && window.S && !S.retired) payload = S;
-    if (mode === "ml") { try { payload = JSON.parse(localStorage.getItem(ML_CLOUD_KEY) || "null"); } catch (e) {} }
-    if (!payload) return;
-    fn("sync-save", { mode: mode, save: payload }).then(function (r) {
-      if (r.status === 422) console.warn("cloud rejected save:", r.body.reasons); // flagged server-side
-    }).catch(function () {});
+  // ================= #18 auto-sync: debounced, queued, retried =================
+  // Every finished match marks its mode dirty. The queue lives in localStorage, so a career
+  // saved offline (or with the app killed mid-flight) still uploads on the next session.
+  // Uploads are silent and can never block or break play: every path is try/caught and the
+  // queue only ever stores mode + timestamps, never a copy of the save.
+  var AUTO_KEY = "footballLegendAutoSync_v1";
+  var AUTO_DEBOUNCE = 6 * 1000;                    // coalesce the burst that follows a match
+  var AUTO_MIN_GAP = 45 * 1000;                    // quota safety: min gap between two uploads of a mode
+  var AUTO_BACKOFF = [30e3, 60e3, 120e3, 300e3, 900e3];
+  var auto = { bal: 0, ml: 0, tries: 0, lastPush: { bal: 0, ml: 0 }, timer: null, running: false };
+
+  function autoLoad() {
+    try {
+      var q = JSON.parse(localStorage.getItem(AUTO_KEY) || "null") || {};
+      auto.bal = +q.bal || 0; auto.ml = +q.ml || 0; auto.tries = +q.tries || 0;
+      auto.lastPush.bal = +q.lastBal || 0; auto.lastPush.ml = +q.lastMl || 0;
+    } catch (e) { auto.bal = 0; auto.ml = 0; auto.tries = 0; }
+  }
+  function autoPersist() {
+    try {
+      localStorage.setItem(AUTO_KEY, JSON.stringify({
+        bal: auto.bal, ml: auto.ml, tries: auto.tries,
+        lastBal: auto.lastPush.bal, lastMl: auto.lastPush.ml,
+      }));
+    } catch (e) { /* storage full / private mode: play continues, only the queue is lost */ }
+  }
+  function autoDue() { // ms until the queue may flush again (0 = now)
+    var wait = 0;
+    if (auto.bal && auto.lastPush.bal + AUTO_MIN_GAP - Date.now() > wait) wait = auto.lastPush.bal + AUTO_MIN_GAP - Date.now();
+    if (auto.ml && auto.lastPush.ml + AUTO_MIN_GAP - Date.now() > wait) wait = auto.lastPush.ml + AUTO_MIN_GAP - Date.now();
+    return Math.max(0, wait);
+  }
+  function autoSchedule(delay) {
+    try { if (auto.timer) clearTimeout(auto.timer); } catch (e) {}
+    auto.timer = setTimeout(function () { auto.timer = null; autoFlush(); }, Math.max(0, delay || 0));
+  }
+  function autoPayload(mode) {
+    if (mode === "bal") return (window.S && !S.retired) ? S : null;
+    try { return JSON.parse(localStorage.getItem(ML_CLOUD_KEY) || "null"); } catch (e) { return null; }
+  }
+  function autoSync(mode) { // called on match finish / season end; marks dirty + debounces
+    if (mode !== "bal" && mode !== "ml") return false;
+    auto[mode] = Date.now();
+    autoPersist();
+    autoSchedule(Math.max(AUTO_DEBOUNCE, autoDue()));
+    return true;
+  }
+  function autoFlush() { // silent; resolves false when there was nothing to do
+    if (auto.running) return Promise.resolve(false);
+    if (!signedIn() || !enabled()) return Promise.resolve(false); // re-armed on sign-in / boot
+    var due = autoDue();
+    if (due > 0) { autoSchedule(due); return Promise.resolve(false); }
+    var modes = ["bal", "ml"].filter(function (m) { return !!auto[m]; });
+    if (!modes.length) return Promise.resolve(false);
+    auto.running = true;
+    var jobs = modes.map(function (m) {
+      var payload = autoPayload(m);
+      if (!payload) { auto[m] = 0; return Promise.resolve({ mode: m, status: "empty" }); }
+      return fn("sync-save", { mode: m, save: payload }).then(function (r) {
+        return { mode: m, status: r.status, body: r.body };
+      }).catch(function () { return { mode: m, status: 0 }; }); // offline / DNS / abort
+    });
+    return Promise.all(jobs).then(function (results) {
+      auto.running = false;
+      var retry = false;
+      results.forEach(function (r) {
+        if (r.status === 200 || r.status === "empty") {
+          auto[r.mode] = 0; auto.lastPush[r.mode] = Date.now();
+        } else if (r.status === 422) {
+          auto[r.mode] = 0; // the server flagged it; retrying the same save would loop forever
+          try { console.warn("cloud rejected save (" + r.mode + "):", r.body && r.body.reasons); } catch (e) {}
+        } else {
+          retry = true; // 401 (session may refresh) / 5xx / network: keep it queued
+        }
+      });
+      if (retry) {
+        auto.tries++;
+        autoSchedule(AUTO_BACKOFF[Math.min(auto.tries - 1, AUTO_BACKOFF.length - 1)]);
+      } else {
+        auto.tries = 0;
+        var next = autoDue();
+        if ((auto.bal || auto.ml) && next > 0) autoSchedule(next);
+      }
+      autoPersist();
+      return true;
+    }).catch(function () {
+      auto.running = false; auto.tries++;
+      autoSchedule(AUTO_BACKOFF[Math.min(auto.tries - 1, AUTO_BACKOFF.length - 1)]);
+      autoPersist();
+      return false;
+    });
+  }
+  function push(mode) { return autoSync(mode); } // kept: existing save()/mlSave() call sites
+  function pendingSync() { return { bal: auto.bal, ml: auto.ml, tries: auto.tries }; }
+  function autoBoot() { // restore the queue, then flush when the network/session allows it
+    autoLoad();
+    if (auto.bal || auto.ml) autoSchedule(autoDue());
+    if (typeof window.addEventListener === "function") {
+      window.addEventListener("online", function () { if (auto.bal || auto.ml) autoSchedule(0); });
+      window.addEventListener("focus", function () { if (auto.bal || auto.ml) autoSchedule(0); });
+      if (typeof document !== "undefined" && document.addEventListener) {
+        document.addEventListener("visibilitychange", function () {
+          if (document.hidden && (auto.bal || auto.ml)) autoFlush(); // leaving the app: push now
+        });
+      }
+    }
+    return pendingSync();
   }
 
   function redeemOnline(code) { // server-first; caller falls back to offline flRedeem
@@ -514,7 +612,8 @@ var Cloud = (function () {
   function isAdmin() { return admin; }
 
   return { init: init, enabled: enabled, signedIn: signedIn, signIn: signIn, signOut: signOut,
-           push: push, redeemOnline: redeemOnline, fetchEvents: fetchEvents,
+           push: push, autoSync: autoSync, flushAutoSync: autoFlush, pendingSync: pendingSync,
+           autoBoot: autoBoot, redeemOnline: redeemOnline, fetchEvents: fetchEvents,
            fetchBroadcast: fetchBroadcast, fetchBroadcasts: fetchBroadcasts,
            fetchLeaderboard: fetchLeaderboard, fetchGhosts: fetchGhosts,
            fetchSeasonBoard: fetchSeasonBoard, fetchSeasons: fetchSeasons,
@@ -524,4 +623,5 @@ var Cloud = (function () {
 })();
 
 // boot: harmless when unconfigured
+try { Cloud.autoBoot(); } catch (e) {}   // #18: restore any queued sync before the first render
 try { Cloud.init(); } catch (e) {}

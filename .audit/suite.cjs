@@ -93,7 +93,8 @@ runStep('Every JS source file compiles cleanly', () => {
     'app/copy-game.js',
     'game/test-v16.js',
     'game/test-wave2.js',
-    'game/test-wave3.js'
+    'game/test-wave3.js',
+    'game/test-wave4.js'
   ];
   for (const rel of files) {
     const abs = path.join(ROOT, rel);
@@ -159,6 +160,13 @@ runStep('v1.6 Wave 3: Training Math, AUTO/MAX Planner, MOTM + Awards Gala (test-
   const out = execSync('node test-wave3.js', { cwd: path.join(ROOT, 'game'), encoding: 'utf8' });
   const m = out.match(/(\d+)\s+passed,\s+(\d+)\s+failed/);
   if (!m || parseInt(m[2], 10) > 0) throw new Error(`wave-3 tests failed: ${out}`);
+  return parseInt(m[1], 10);
+});
+
+runStep('v1.6 Wave 4: Supabase RLS Fix + Auto-Sync on Match Finish (test-wave4.js)', () => {
+  const out = execSync('node test-wave4.js', { cwd: path.join(ROOT, 'game'), encoding: 'utf8' });
+  const m = out.match(/(\d+)\s+passed,\s+(\d+)\s+failed/);
+  if (!m || parseInt(m[2], 10) > 0) throw new Error(`wave-4 tests failed: ${out}`);
   return parseInt(m[1], 10);
 });
 

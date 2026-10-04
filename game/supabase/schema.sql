@@ -106,10 +106,18 @@ alter table flags enable row level security;
 alter table stats_daily enable row level security;
 
 -- profiles: owner reads/creates/updates own row (not `banned`); admins read+write all
+-- NOTE (v1.6 W4 / #18): the owner-update WITH CHECK reads `banned` through a SECURITY DEFINER
+-- helper. A plain `(select banned from profiles ...)` inside this policy recursed (42P17
+-- "infinite recursion detected in policy for relation profiles") and broke every owner write.
+create or replace function fl_is_banned(p_uid uuid)
+returns boolean
+language sql stable security definer set search_path = public as $$
+  select coalesce((select banned from profiles where uid = p_uid), false);
+$$;
 create policy p_profiles_own_r on profiles for select using (auth.uid() = uid or is_admin());
 create policy p_profiles_own_i on profiles for insert with check (auth.uid() = uid and banned = false);
 create policy p_profiles_own_u on profiles for update using (auth.uid() = uid)
-  with check (auth.uid() = uid and banned = (select banned from profiles p where p.uid = auth.uid()));
+  with check (auth.uid() = uid and fl_is_banned(auth.uid()) = false);
 create policy p_profiles_admin_u on profiles for update using (is_admin());
 
 -- saves: owner READ ONLY (writes go through the sync-save edge function, which validates)
@@ -136,3 +144,12 @@ create policy p_admins_w on admins for all using (is_admin()) with check (is_adm
 -- flags/stats: admin read; writes come from edge functions (service role bypasses RLS)
 create policy p_flags_admin_r on flags for select using (is_admin());
 create policy p_stats_admin_r on stats_daily for select using (is_admin());
+
+-- ============ GRANTS: anon/authenticated are SELECT-ONLY ============
+-- Writes exist only inside the edge functions (service role). See wave4-rls-fix.sql, which
+-- re-applies the same revokes to an existing project, plus the verification queries.
+revoke insert, update, delete, truncate, references, trigger on all tables in schema public from anon, authenticated;
+grant select on public.events, public.broadcasts, public.seasons, public.season_ranks to anon, authenticated;
+grant select on public.profiles, public.saves, public.inbox to authenticated;
+grant select on public.admins, public.flags, public.stats_daily, public.codes, public.code_redemptions to authenticated;
+revoke execute on function bump_stat(text) from anon, authenticated;

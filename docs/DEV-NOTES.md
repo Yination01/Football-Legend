@@ -151,3 +151,32 @@ Hard-won knowledge from development. Check this before repeating an approach.
 - **Patchers are single-use.** `patch_v3_*.py` were applied once; re-running duplicates `const ECON`
   and breaks the file. Recovery is `git checkout HEAD -- game/<file>.js` + a fresh edit.
 
+## v1.6 Wave 4 notes (#18 RLS fix + auto-sync)
+
+- **The production bug was a policy that read its own table.** `p_profiles_own_u` had
+  `with check (... banned = (select banned from profiles ...))`, which Postgres re-evaluates under
+  the same policy: `42P17 infinite recursion detected in policy for relation profiles`. Owner
+  profile writes (display name, `last_seen`) failed while the game kept working offline, so it was
+  invisible. Ban state now comes from `fl_is_banned(uuid)` (SECURITY DEFINER, `set search_path`).
+- **Select-only is enforced twice**: RLS (no write policy on `saves`) *and* privileges
+  (`revoke insert/update/delete/truncate/references/trigger ... from anon, authenticated`, plus
+  `alter default privileges` so new tables inherit it). Writes exist only in the edge functions'
+  service-role client. `bump_stat` is revoked from players.
+- **Auto-sync is a queue, not a throttle.** The old `push()` dropped anything inside a 90s cooldown
+  (data could sit unsent until the next match, or forever if the app closed). Now every finished
+  match marks its mode dirty; a debounce (`AUTO_DEBOUNCE` 6s) coalesces the burst, a quota gap
+  (`AUTO_MIN_GAP` 45s) spaces uploads, and the queue lives in `localStorage`
+  (`footballLegendAutoSync_v1` — modes + timestamps only, never save data) so it survives a kill.
+- **Retry rules, in order of honesty:** 200 → clear, counter reset; 422 → clear once and log (the
+  validator flagged it — retrying would loop); 401/5xx/network → keep queued, back off
+  (`AUTO_BACKOFF` 30s/60s/120s/300s/900s, capped). Flush triggers: debounce, `online`, window
+  `focus`, `visibilitychange` (hidden), sign-in, and boot.
+- **`syncNow()` still exists for the manual button** and clears the auto queue it just satisfied.
+- **Testing cloud code**: `test-wave4.js` stubs `setTimeout`/`Date.now` with a virtual clock and
+  drives `advance(ms)` so debounce/backoff are asserted without sleeping. Notes for the next
+  person: `window.S` must exist for mode `bal`, the ML payload comes from
+  `localStorage["footballLegendML_v1"]`, and a missing payload clears the entry as `"empty"`.
+- **`mlNewSave(region, club, seed)`** — pass a seed in tests. Without it the world (club strengths,
+  squad, fixtures) is built from `Date.now()`, and any assertion that counts events (MOTM tally,
+  scorers) will flake across runs.
+

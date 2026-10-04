@@ -20,9 +20,9 @@ spec.
 6. **Save migrations**: every new save field ships with a default-on-load migration in
    `ML.enter()` / `flBootScreen()` paths so existing careers never break.
 
-**Test gate today:** `npm run test:all` → **898 checks green** (config, syntax 9, fairness 21,
+**Test gate today:** `npm run test:all` → **944-946 checks green** (config, syntax 10, fairness 21,
 ML 364-368, ML-CT 27, BaL-CT 25, skills 102, v15 55, v1.6 suite 54, wave-2 suite 95,
-**wave-3 suite 127**).
+wave-3 suite 127, **wave-4 suite 49**).
 
 ---
 
@@ -241,12 +241,27 @@ labelling: AI-club player stats are *not* tracked, so #13/#17 say so instead of 
 ## 5. Wave 4 — cloud
 
 ### #18 Supabase Leaderboard Sync — *RLS Fix + Auto-Sync on Match Finish*
-- **Owner tasks (5 min):** run `game/supabase/leaderboard.sql`; add redirect URLs
-  (`https://yination01.github.io/Football-Legend/game/` and `com.footballlegend.game://callback`);
-  grant yourself admin; revoke the old PAT.
-- Code: verified RLS (select-only for anon, writes only through `sync-save`/service role), plus
-  **auto-push after every finished match** (debounced, offline-queued, retried on next session).
+- **Owner tasks (5 min):** run `game/supabase/wave4-rls-fix.sql` (idempotent; also re-run
+  `leaderboard.sql` if you have not since v1.5) and check both verification queries return zero rows;
+  add redirect URLs (`https://yination01.github.io/Football-Legend/game/` and
+  `com.footballlegend.game://callback`); grant yourself admin; revoke the old PAT.
+- Code: verified RLS (**select-only for anon/authenticated at the privilege level**, writes only
+  through `sync-save`/service role), plus **auto-push after every finished match** — debounced
+  bursts, queued in `localStorage` while offline, retried with backoff and flushed on next session.
+- The `profiles` owner-update policy no longer self-references (`fl_is_banned` SECURITY DEFINER
+  helper) — it used to recurse (42P17) and break every owner profile write.
 - Leaderboards read server-computed values from validated saves only; banned players excluded.
+
+**Status:** implemented — suite `game/test-wave4.js` (**49 checks**). The SQL side is asserted as
+contracts against the shipped files (no database in CI, $0 budget): no self-referencing policy, no
+write privilege for `anon`/`authenticated` on any table, writes only through the validated edge
+functions, every board filtering banned players and returning no raw save JSON. The client side is
+measured, not assumed: `cloud.js` runs headlessly against a virtual clock, a fake session and a
+scriptable fetch, so debounce, coalescing, the 45s quota gap, backoff, 422-drop, 401-retain,
+kill-and-relaunch retry, sign-in flush, visibility flush and offline flush are all real assertions.
+One honesty note: the wave-3 suite used to flake (the ML world was seeded from the clock) —
+`mlNewSave(region, club, seed)` now accepts a seed and every driven season in the tests pins one,
+so a green suite means the same thing on every machine.
 
 ---
 
