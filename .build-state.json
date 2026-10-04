@@ -2,9 +2,9 @@
   "_comment": "The commit each dispatched build was cut from. Updated at dispatch time, because the build runs on GitHub Actions and cannot write back to git. .audit/unshipped.cjs reads this to report what is on main but in no APK.",
   "lastBuild": {
     "number": 17,
-    "commit": "f606dab22c3b1414a2e274df944f7d4a56a5b2a6",
+    "commit": "8f7673c",
     "dispatchedAt": "2026-10-04",
-    "runId": "37197367060",
+    "runId": "37197491856",
     "tag": "preview-17"
   }
 }
