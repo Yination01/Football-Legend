@@ -787,11 +787,17 @@ function decisionOdds(dec, player, roleId) {
     power: Math.round(Math.min(94, (0.05 + Math.pow((eS("SHO") * 0.6 + eS("PHY") * 0.4) / 100, 2) * 0.75) * sk("fkPower") * 100)),
     cross: Math.round(Math.min(94, (0.06 + Math.pow(eS("PAS") / 100, 2) * 0.72) * sk("fkCross") * 100)) };
   if (dec.type === "gkpen") {
+    // EXACT mirror of resolveGKPen: uniform shooter direction, the wrong-guess floor, and the 12%
+    // branch where the taker misses on his own. Displayed % == true P(no goal), no fudge constants.
     const gsk = (k) => skillMul(skillsActive(P.skills, P.pos || "GK"), k, dec.skctx);
     const penM = gsk("gkPen");
+    const guessRight = (0.34 + eS("DEF") * 0.004) * penM;   // dived the right way
+    const stayMiddle = 0.72 * penM;                          // stood tall, taker went middle
+    const wrongGuess = 0.06 * Math.min(1.2, penM);            // wrong way: only a faint hope
+    const kept = (sv) => sv + (1 - sv) * 0.12;               // saved, or the taker misses
     return { type: "gkpen", stam: Math.round(dec.stam || 100),
-      dive: Math.round((0.34 + eS("DEF") * 0.004) * penM * 33 + 6),
-      stay: Math.round(0.72 * penM * 33 + 4) };
+      dive: Math.round((kept(guessRight) + 2 * kept(wrongGuess)) / 3 * 100),
+      stay: Math.round((kept(stayMiddle) + 2 * kept(wrongGuess)) / 3 * 100) };
   }
   if (dec.type === "gk") {
     const role = ROLES[roleId] || ROLES.balanced;

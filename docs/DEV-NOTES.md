@@ -106,5 +106,14 @@ Hard-won knowledge from development. Check this before repeating an approach.
   captures nothing — the reel is a playback of what the ticker already showed.
 - **DOM-hook integrity test:** `test-wave2.js` diffs every `$("#id")` in the match-screen regions of
   `app.js`/`ml.js` against the ids those regions render. Add a hook without markup and it fails.
+- **Keeper penalty odds were approximated before v1.6 W2** (`(0.34+DEF*0.004)*penM*33+6` for dive,
+  `0.72*penM*33+4` for stay) — those fudge constants ignored the 12% branch where the taker misses on
+  his own, so the display understated the keeper's real chance by ~9pp. `decisionOdds` now mirrors
+  `resolveGKPen` exactly: `kept(s) = s + (1-s)*0.12`, `(kept(match) + 2*kept(wrongGuess))/3`. The
+  buttons now read "% kept out" (save OR taker miss), and `test-wave2.js` measures both branches.
+- **The defensive matrix is not defenders-only:** the gate is `posInfo.defBias > 0`, so midfielders
+  inherit it — measured duel decisions per match: CB 1.09, DMF 0.78, RB 0.66, LB 0.59, CMF 0.47,
+  AMF 0.13, wingers 0.07-0.09; SS/CF are hard-zero (defBias 0) and GK uses its own `gk`/`gkpen`
+  branch. Midfield roles bend the matrix through `risk` (fouls), not `tackleFreq` (df_-only).
 - **Recovery:** these edits are committed, so `git checkout HEAD -- game/<file>.js` restores a known
   good state; the wave-1 patchers (`/home/user/patch_v16_*.py`) must NOT be re-run.

@@ -81,6 +81,90 @@ check('#5 scenarios cover 1v1 / through ball / cross / counter / set piece',
   check('#5 the matrix is actually reached by the engine (sample was large enough)', n >= 1200, 'n=' + n);
 }
 
+/* ---- #5 coverage: which positions actually get the matrix (measured, not assumed) ---- */
+{
+  const roles = { GK: 'gk_line', CB: 'df_hold', LB: 'df_hold', RB: 'df_hold', DMF: 'balanced', CMF: 'balanced', AMF: 'balanced', LWF: 'balanced', RWF: 'balanced', SS: 'balanced', CF: 'balanced' };
+  const keys = Object.keys(roles);
+  const tally = {};
+  const N = 300;
+  for (const pos of keys) {
+    let def = 0, gk = 0, gkpen = 0;
+    for (let i = 0; i < N; i++) {
+      const m = E.createMatch(E.STARTER_CLUBS[0], E.STARTER_CLUBS[4], {
+        seed: 4400000 + i * 11 + keys.indexOf(pos), playerTeam: 0, role: roles[pos],
+        player: { pos, playstyle: pos === 'GK' ? 'shotstopper' : 'allrounder', eff: E.baseStats(pos) }
+      });
+      let done = false;
+      while (!done) {
+        const s2 = m.step();
+        if (s2.decision) {
+          if (s2.decision.type === 'def') def++;
+          else if (s2.decision.type === 'gk') gk++;
+          else if (s2.decision.type === 'gkpen') gkpen++;
+          m.decide(s2.decision.type === 'def' ? 'tackle' : s2.decision.type === 'gk' ? 'stay' : s2.decision.type === 'gkpen' ? 'stay' : 'auto');
+        }
+        done = s2.done || m.state.done;
+      }
+    }
+    tally[pos] = { def: def / N, gk: gk / N, gkpen: gkpen / N };
+  }
+  check('#5 position appetite for defensive duels is a real football ladder (CB > DMF > CMF > AMF > wingers > SS/CF)',
+    E.POSITIONS.CB.defBias > E.POSITIONS.DMF.defBias && E.POSITIONS.DMF.defBias > E.POSITIONS.CMF.defBias &&
+    E.POSITIONS.CMF.defBias > E.POSITIONS.AMF.defBias && E.POSITIONS.AMF.defBias > E.POSITIONS.LWF.defBias &&
+    E.POSITIONS.LWF.defBias > 0 && E.POSITIONS.SS.defBias === 0 && E.POSITIONS.CF.defBias === 0 && E.POSITIONS.GK.defBias === 0);
+  check('#5 midfielders DO get the defensive matrix (' + keys.map(p => p + ' ' + tally[p].def.toFixed(2)).join(', ') + ' per match)',
+    tally.CB.def >= 0.4 && tally.DMF.def >= 0.3 && tally.CMF.def >= 0.15 && tally.AMF.def >= 0.02 && tally.LWF.def >= 0.005 && tally.RWF.def >= 0.005);
+  check('#5 CB/DMF see more duels than CMF, and CMF more than AMF', tally.CB.def > tally.CMF.def && tally.DMF.def > tally.AMF.def);
+  check('#5 pure strikers never defend (by design, defBias 0)', tally.CF.def === 0 && tally.SS.def === 0);
+  check('#5 keepers never get the outfield matrix - they get their own branch (' + tally.GK.gk.toFixed(2) + ' GK calls/match)',
+    tally.GK.def === 0 && tally.CF.gk === 0 && tally.GK.gk >= 2 && tally.GK.gkpen > 0);
+  check('#5 midfield roles bend the duel matrix honestly (aggressive/runs foul more than discipline)',
+    E.defChoiceOdds('tackle', E.DEF_SCENARIOS[0], Object.assign(E.baseStats('CMF'), { DEF: 60, PHY: 65, PAC: 62 }), E.ROLES.aggressive, [], 100).foul >
+    E.defChoiceOdds('tackle', E.DEF_SCENARIOS[0], Object.assign(E.baseStats('CMF'), { DEF: 60, PHY: 65, PAC: 62 }), E.ROLES.discipline, [], 100).foul &&
+    E.defChoiceOdds('tackle', E.DEF_SCENARIOS[0], Object.assign(E.baseStats('CMF'), { DEF: 60, PHY: 65, PAC: 62 }), E.ROLES.runs, [], 100).foul >
+    E.defChoiceOdds('tackle', E.DEF_SCENARIOS[0], Object.assign(E.baseStats('CMF'), { DEF: 60, PHY: 65, PAC: 62 }), E.ROLES.discipline, [], 100).foul);
+}
+
+/* ---- keeper branch honesty: open play (stay/rush) and penalties are shown at the TRUE probability ---- */
+{
+  const eff = { PAC: 50, SHO: 30, PAS: 55, DRI: 40, DEF: 72, PHY: 60 };
+  const pl = { pos: 'GK', playstyle: 'shotstopper', eff };
+  function gkSample(kind, choice, roleId, N) {
+    let shown = 0, shownN = 0, good = 0, n = 0;
+    for (let i = 0; i < N; i++) {
+      const m = E.createMatch(E.STARTER_CLUBS[0], E.STARTER_CLUBS[4], { seed: 4700000 + i * 13 + choice.length, playerTeam: 0, player: pl, role: roleId });
+      let done = false;
+      while (!done) {
+        const s2 = m.step();
+        if (s2.decision) {
+          if (s2.decision.type === kind) {
+            const o = E.decisionOdds(s2.decision, pl, roleId);
+            const shownPct = kind === 'gk' ? (choice === 'stay' ? o.stay : o.rush) : (choice === 'stay' ? o.stay : o.dive);
+            shown += shownPct; shownN++;
+            const events = m.decide(choice).events || [];
+            n++;
+            if (kind === 'gk') { if (events.some(e => e.gk === 'save')) good++; }
+            else if (!events.some(e => e.type === 'goal')) good++;
+          } else m.decide(s2.decision.type === 'gk' ? 'stay' : s2.decision.type === 'gkpen' ? 'stay' : 'auto');
+        }
+        done = s2.done || m.state.done;
+      }
+    }
+    return { shown: shown / shownN / 100, actual: good / n, n };
+  }
+  const stay = gkSample('gk', 'stay', 'gk_line', 250);
+  const rush = gkSample('gk', 'rush', 'gk_sweeper', 250);
+  check('#5 keeper "STAY BIG" % is the true save rate (' + (100 * stay.shown).toFixed(1) + '% shown vs ' + (100 * stay.actual).toFixed(1) + '% saved, n=' + stay.n + ')', near(stay.actual, stay.shown, 0.05));
+  check('#5 keeper "RUSH OUT" % includes the blunder risk honestly (' + (100 * rush.shown).toFixed(1) + '% shown vs ' + (100 * rush.actual).toFixed(1) + '% saved, n=' + rush.n + ')', near(rush.actual, rush.shown, 0.05));
+  const penStay = gkSample('gkpen', 'stay', 'gk_line', 9000);
+  const penDive = gkSample('gkpen', 'left', 'gk_line', 9000);
+  check('#5 penalty "STAND TALL" % is the true kept-out rate (' + (100 * penStay.shown).toFixed(1) + '% shown vs ' + (100 * penStay.actual).toFixed(1) + '% measured, n=' + penStay.n + ')', near(penStay.actual, penStay.shown, 0.05));
+  check('#5 penalty "DIVE" % is the true kept-out rate (' + (100 * penDive.shown).toFixed(1) + '% shown vs ' + (100 * penDive.actual).toFixed(1) + '% measured, n=' + penDive.n + ')', near(penDive.actual, penDive.shown, 0.05));
+  check('#5 keeper penalty display is exact, not approximated (no fudge constants, no "~")',
+    engSrc.indexOf('* 33 + 6') < 0 && engSrc.indexOf('0.72 * penM * 33 + 4') < 0 &&
+    appSrc.indexOf('odds.dive + "% kept out"') >= 0 && appSrc.indexOf('odds.stay + "% kept out"') >= 0 && appSrc.indexOf('"~" + odds') < 0);
+}
+
 /* ============================== #3 extra time + penalty shootouts ============================== */
 check('#3 shootout kick odds stay in a believable band',
   [40, 60, 75, 90].every(sho => { const p = E.shootoutKickOdds({ SHO: sho, PHY: sho }, { DEF: 70 }); return p >= 0.45 && p <= 0.92; }));

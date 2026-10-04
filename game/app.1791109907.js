@@ -2243,10 +2243,10 @@ function matchScreen(fx, displayedProbs) {
                    ["power", "\ud83d\udca5 POWER \u00b7 SHO+PHY", odds.power + "% goal"],
                    ["cross", "\ud83c\udd70\ufe0f CROSS \u00b7 PAS", odds.cross + "% assist"]];
       } else if (dec.type === "gkpen") {
-        scenLabel = "\u26a0\ufe0f PENALTY AGAINST \u2014 pick your moment, keeper!";
-        buttons = [["left", "\u2b05\ufe0f DIVE LEFT", "~" + odds.dive + "% save"],
-                   ["right", "\u27a1\ufe0f DIVE RIGHT", "~" + odds.dive + "% save"],
-                   ["stay", "\ud83e\uddcd STAND TALL", "~" + odds.stay + "% save"]];
+        scenLabel = "\u26a0\ufe0f PENALTY AGAINST \u2014 pick your moment, keeper! (kept out = save or the taker misses)";
+        buttons = [["left", "\u2b05\ufe0f DIVE LEFT", odds.dive + "% kept out"],
+                   ["right", "\u27a1\ufe0f DIVE RIGHT", odds.dive + "% kept out"],
+                   ["stay", "\ud83e\uddcd STAND TALL", odds.stay + "% kept out"]];
       } else if (dec.type === "def") { // #5: the whole defensive decision matrix, odds straight from the engine
         const D = odds.def || { tackle: {}, jockey: {}, step: {}, drop: {} };
         scenLabel = (dec.scen ? dec.scen.label : "They come at you!") + " \u2014 read it and commit.";
