@@ -255,10 +255,83 @@ function pickWeighted(rng, arr) {
              GK:       'stay'  | 'rush' | 'auto'
    All outcomes are honest functions of stats + probabilities.
    ============================================================ */
+// ---------- DEFENSIVE DECISION MATRIX (#5) ----------
+// Shown odds and resolved odds come from defChoiceOdds() ONLY, so the four buttons are the
+// exact probabilities the engine rolls. No hidden difficulty, ever.
+const DEF_SCENARIOS = [
+  { id: "wing1v1",  label: "Their winger runs at you \u2014 one-on-one!",        conv: 0.02, tackleAdj: 0.00, jockeyAdj: 0.04, stepAdj: -0.03, w: 3 },
+  { id: "through",  label: "A through ball is played in behind you!",            conv: 0.10, tackleAdj: -0.05, jockeyAdj: 0.06, stepAdj: 0.02, w: 2 },
+  { id: "cross",    label: "The cross is coming in \u2014 attack it or hold?",  conv: 0.04, tackleAdj: 0.02, jockeyAdj: -0.02, stepAdj: -0.02, w: 2 },
+  { id: "counter2", label: "They break 2-on-2 \u2014 the counter is on!",        conv: 0.08, tackleAdj: -0.04, jockeyAdj: 0.05, stepAdj: 0.04, w: 2 },
+  { id: "setmark",  label: "Your man peels off at the set piece!",               conv: 0.06, tackleAdj: 0.00, jockeyAdj: 0.00, stepAdj: 0.00, w: 1 }
+];
+function defChoiceOdds(choice, scen, eff, role, skills, stam) {
+  scen = scen || DEF_SCENARIOS[0];
+  role = role || { risk: 1 };
+  const fat = 0.75 + 0.25 * ((stam != null ? stam : 100) / 100);
+  const D = (eff.DEF * fat) / 100, PH = (eff.PHY * fat) / 100, PA = (eff.PAC * fat) / 100;
+  const tb = (skills || []).includes("Track Back") ? 0.04 : 0;
+  const adj = role.tackleAdj || 0;
+  let win, foul = 0, convMul = 1;
+  if (choice === "tackle") {
+    win = 0.26 + D * 0.40 + PH * 0.10 + adj * 0.35 + tb + (scen.tackleAdj || 0);
+    foul = Math.max(0.04, 0.15 - D * 0.07 + ((role.risk || 1) - 1) * 0.10);
+  } else if (choice === "jockey") {
+    win = 0.09 + D * 0.18 + PA * 0.07 + (scen.jockeyAdj || 0);
+    convMul = 0.55; // delay him, don't dive in
+  } else if (choice === "step") {
+    win = 0.20 + D * 0.32 + PA * 0.13 + adj * 0.35 + tb + (scen.stepAdj || 0);
+    foul = Math.max(0.03, 0.09 - D * 0.04);
+    convMul = 1.18; // high line: win it high or get played through
+  } else { // drop off
+    win = 0.04 + D * 0.10;
+    convMul = 0.70; // deny space, never risk the foul
+  }
+  win = Math.max(0.05, Math.min(0.90, win));
+  foul = Math.max(0, Math.min(foul, 1 - win - 0.05));
+  return { win, foul, beaten: 1 - win - foul, convMul };
+}
+
+// ---------- PENALTY SHOOTOUT (#3) ----------
+// One honest conversion probability per kick; the UI, the auto-resolver and the abandoned-match
+// resolver all read the SAME number.
+function shootoutKickOdds(att, kp) {
+  const a = ((att && att.SHO != null ? att.SHO : 65) * 0.62 + (att && att.PHY != null ? att.PHY : 65) * 0.38) / 100;
+  const d = ((kp && kp.DEF != null ? kp.DEF : 65)) / 100;
+  return Math.max(0.45, Math.min(0.92, 0.72 + (a - d) * 0.55));
+}
+function penaltyShootout(home, away, opts) {
+  const o = opts || {};
+  const rng = mulberry32(o.seed != null ? o.seed : Math.floor(Math.random() * 2 ** 31));
+  const hStr = (home && home.str != null) ? home.str : 65, aStr = (away && away.str != null) ? away.str : 65;
+  const hAtt = { SHO: hStr, PHY: hStr }, aAtt = { SHO: aStr, PHY: aStr };
+  const hKp = { DEF: aStr }, aKp = { DEF: hStr };
+  let h = 0, a = 0, hTaken = 0, aTaken = 0, decided = false;
+  const kicks = [];
+  function take(side) {
+    const att = side === 0 ? hAtt : aAtt, kp = side === 0 ? hKp : aKp;
+    const p = shootoutKickOdds(att, kp);
+    const scored = rng() < p;
+    if (scored) { if (side === 0) h++; else a++; }
+    if (side === 0) hTaken++; else aTaken++;
+    kicks.push({ side, p: Math.round(p * 100), scored });
+    return scored;
+  }
+  for (let r = 0; r < 5 && !decided; r++) {
+    take(0);
+    if (h > a + Math.max(0, 5 - aTaken)) { decided = true; break; } // away cannot catch up
+    take(1);
+    if (a > h + Math.max(0, 5 - hTaken)) { decided = true; break; } // home cannot catch up
+  }
+  let sd = 0;
+  while (h === a && sd++ < 30) { take(0); take(1); } // sudden death
+  return { scoredH: h, scoredA: a, winner: h > a ? 0 : 1, kicks, suddenDeath: sd > 0, rounds: Math.max(hTaken, aTaken) };
+}
+
 function createMatch(home, away, opts) {
   const o = opts || {};
   const rng = mulberry32(o.seed != null ? o.seed : Math.floor(Math.random() * 2 ** 31));
-  const role = ROLES[o.role || "balanced"] || ROLES.balanced;
+  let role = ROLES[o.role || "balanced"] || ROLES.balanced;
   const P = o.player || null;
   const ps = P ? (PLAYSTYLES[P.playstyle] || null) : null;
   // Only skills legal for the match position apply (GK never gets Outside Curler bonus etc.)
@@ -286,7 +359,8 @@ function createMatch(home, away, opts) {
     injuredFor: 0, playerOut: false, cards: { h: 0, a: 0 }, holdBoost: 0
   };
   const fitLvl = o.fitLvl || 0, medLvl = o.medLvl || 0;
-  const DRAIN = (0.42 * role.risk) * (1 - 0.15 * fitLvl);
+  const KO = !!o.ko; // knockout tie: level after 90' means 30 more minutes, then penalties
+  let DRAIN = (0.42 * role.risk) * (1 - 0.15 * fitLvl);
   // fatigue-scaled stat: full value at 100 stamina, 75% floor at 0
   function eS(k) { return P.eff[k] * (0.75 + 0.25 * (st.stamina / 100)); }
 
@@ -350,6 +424,42 @@ function createMatch(home, away, opts) {
       }
     }
     st.stamina = Math.max(0, st.stamina - 1.5);
+    return out;
+  }
+  function resolveDef(choice, ctx) { // #5: jockey / tackle / step up / drop off
+    const out = [];
+    if (choice === "auto") { // AI defenders use the same matrix, weighted by role
+      const w = { jockey: 0.34, tackle: 0.34, step: 0.22, drop: 0.10 };
+      const r = rng(); let acc = 0, picked = "jockey";
+      for (const k of ["jockey", "tackle", "step", "drop"]) { acc += w[k]; if (r <= acc) { picked = k; break; } }
+      choice = picked;
+    }
+    const scen = ctx.scen || DEF_SCENARIOS[0];
+    const o2 = defChoiceOdds(choice, scen, P.eff, role, pskills, ctx.stam != null ? ctx.stam : st.stamina);
+    const roll = rng();
+    if (roll < o2.win) { // won it back
+      st.pTackles = (st.pTackles || 0) + 1;
+      const counter = choice === "step";
+      st.rating += counter ? 0.30 : 0.22;
+      if (counter) { st.recycle = 2; st.possHome = pTeam !== 0; } // stepped up high -> we counter now
+      out.push(ev("tackle", ctx.isHome, { by: "you", def: choice, scen: scen.id }));
+      return out;
+    }
+    if (roll < o2.win + o2.foul) { // foul: free kick, card risk
+      st.rating -= 0.12;
+      if (rng() < 0.22 * (1 + ((role.risk || 1) - 1))) {
+        if (pTeam === 0) st.cards.h++; else st.cards.a++;
+        st.rating -= 0.20;
+        out.push(ev("card", ctx.isHome, { by: "you", def: choice, scen: scen.id }));
+      } else {
+        out.push(ev("foul", ctx.isHome, { by: "you", def: choice, scen: scen.id }));
+      }
+      return out;
+    }
+    // beaten: their chance resolves with this choice's quality multiplier
+    const c = clampConv(ctx.conv * o2.convMul);
+    if (rng() < c) { if (ctx.isHome) st.gH++; else st.gA++; st.rating -= 0.30; out.push(ev("goal", ctx.isHome, { scen: scen.id, beatenBy: choice })); }
+    else { st.rating -= 0.10; out.push(ev(rng() < .5 ? "save" : "miss", ctx.isHome, { scen: scen.id, beatenBy: choice })); }
     return out;
   }
   function resolveGK(choice, ctx) {
@@ -485,7 +595,7 @@ function createMatch(home, away, opts) {
       return finishStep(out);
     }
 
-    let chanceP = CHANCE_PER_MIN;
+    let chanceP = CHANCE_PER_MIN * (st.min >= 90 ? 0.6 : 1); // extra time is tighter, not more chaotic
     let lockHome = null;
     if (st.recycle > 0) {
       chanceP += 0.10; lockHome = st.possHome; st.recycle--;
@@ -499,17 +609,11 @@ function createMatch(home, away, opts) {
       const playerAttacking = P && !st.playerOut && !posInfo.gk && ((isHome && pTeam === 0) || (!isHome && pTeam === 1));
       const playerDefending = P && !st.playerOut && ((isHome && pTeam === 1) || (!isHome && pTeam === 0));
 
-      // defensive involvement: tackles for def-biased positions (auto, honest DEF roll)
+      // #5 defensive involvement: defenders get the interactive decision matrix
       if (playerDefending && !posInfo.gk && posInfo.defBias > 0 && rng() < 0.30 * posInfo.defBias * (ps ? ps.def : 1) * (role.tackleFreq || 1)) {
-        st.pTackles = st.pTackles || 0;
-        const tbBump = pskills.includes("Track Back") ? 0.04 : 0;
-        if (rng() < 0.35 + (P.eff.DEF / 100) * 0.45 + (role.tackleAdj || 0) + tbBump) {
-          st.pTackles++; st.rating += 0.22;
-          out.push(ev("tackle", isHome, { by: "you" }));
-          return finishStep(out); // chance snuffed out
-        } else {
-          st.rating -= 0.08;
-        }
+        const scen = pickWeighted(rng, DEF_SCENARIOS);
+        st.pending = { type: "def", conv: Math.max(0.05, Math.min(0.62, conv + scen.conv)), isHome, scen, stam: st.stamina };
+        return { min: st.min, events: out, decision: st.pending, done: false };
       }
       // GK decision on opponent chance
       if (playerDefending && posInfo.gk) {
@@ -544,8 +648,14 @@ function createMatch(home, away, opts) {
     }
     return finishStep(out);
   }
+  function regulationOver() {
+    if (!KO) return st.min >= 90;
+    if (st.min >= 120) return true;                       // ET played out
+    return st.min >= 90 && st.gH !== st.gA;               // decided in normal time
+  }
   function finishStep(out) {
-    if (st.min >= 90) {
+    if (regulationOver()) {
+      if (st.gH === st.gA) st.level = true; // KO tie -> the caller runs the shootout
       st.done = true;
       if (P != null && pTeam != null) {
         const won = (pTeam === 0 && st.gH > st.gA) || (pTeam === 1 && st.gA > st.gH);
@@ -563,7 +673,8 @@ function createMatch(home, away, opts) {
   function decide(choice) {
     if (!st.pending) return { events: [] };
     const ctx = st.pending; st.pending = null;
-    const events = ctx.type === "gk" ? resolveGK(choice, ctx)
+    const events = ctx.type === "def" ? resolveDef(choice, ctx)
+      : ctx.type === "gk" ? resolveGK(choice, ctx)
       : ctx.type === "gkpen" ? resolveGKPen(choice, ctx)
       : (ctx.type === "penalty" || ctx.type === "freekick") ? resolveSetPiece(choice, ctx)
       : resolveChance(choice, ctx);
@@ -577,12 +688,17 @@ function createMatch(home, away, opts) {
     st.rating += st.min >= 60 ? 0 : -0.15; // very early subs read poorly
     return ev("sub", pTeam === 0, { by: "you" });
   }
+  function setRole(roleId) { // #1: mid-match role switch from the tactics drawer
+    role = ROLES[roleId] || ROLES.balanced;
+    DRAIN = (0.42 * role.risk) * (1 - 0.15 * fitLvl);
+  }
   function result() {
-    return { gH: st.gH, gA: st.gA, rating: st.rating, pGoals: st.pGoals, pAssists: st.pAssists,
+    return { gH: st.gH, gA: st.gA, et: st.min > 90, level: !!st.level, minute: st.min,
+             rating: st.rating, pGoals: st.pGoals, pAssists: st.pAssists,
              pShots: st.pShots, pKeyPasses: st.pKeyPasses, pSaves: st.pSaves, pTackles: st.pTackles || 0,
              staminaEnd: Math.round(st.stamina), injuredFor: st.injuredFor, subbed: !!st.subbed };
   }
-  return { step, decide, result, requestSub, setStrengths, state: st };
+  return { step, decide, result, requestSub, setStrengths, setRole, state: st };
 }
 
 // Honest decision odds — EXACT mirrors of resolveChance/resolveGK math.
@@ -692,6 +808,16 @@ function decisionOdds(dec, player, roleId) {
     return { type: "gk", xg: Math.round(dec.conv * 100),
       stay: Math.round((1 - stayConcede) * 100), rush: Math.round((1 - rushConcede) * 100),
       blunder: Math.round(bl * 100) };
+  }
+  if (dec.type === "def") { // #5: exact mirror of resolveDef's roll
+    const role = ROLES[roleId] || ROLES.balanced;
+    const scen = dec.scen || DEF_SCENARIOS[0];
+    const out2 = {};
+    for (const c of ["tackle", "jockey", "step", "drop"]) {
+      const r = defChoiceOdds(c, scen, P.eff, role, activeSk, dec.stam); // activeSk + dec.stam: identical inputs to resolveDef
+      out2[c] = { win: Math.round(r.win * 100), foul: Math.round(r.foul * 100), beaten: Math.round(r.beaten * 100) };
+    }
+    return { type: "def", xg: Math.round((dec.conv || 0) * 100), stam: Math.round(dec.stam != null ? dec.stam : 100), def: out2 };
   }
   const sm = dec.scen || { shoot: 1, pass: 1 };
   const shoot = clamp(dec.conv * (0.55 + (eS("SHO") / 100) * 0.9) * (ps ? ps.shoot : 1) * sm.shoot * sk("shoot"));
@@ -901,7 +1027,13 @@ function ctSimKORound(ct, gal, seed, skipMine, myEntry) {
     const mine = myEntry && [A, B].some(e2 => e2.league === myEntry.league && e2.club === myEntry.club);
     if (skipMine && mine) { myFx = { A, B, slot: next.length }; next.push(null); continue; }
     const r = simulateMatch(ctClub(gal, A), ctClub(gal, B), { seed: hashSeed(seed + ":ctko:" + ct.koRound + ":" + i), fast: true });
-    let w = r.gH > r.gA ? A : r.gH < r.gA ? B : (mulberry32(hashSeed(seed + "p" + i))() < 0.5 ? A : B);
+    let w;
+    if (r.gH > r.gA) w = A;
+    else if (r.gH < r.gA) w = B;
+    else { // #3: AI-vs-AI knockout ties go to an honest shootout on the two clubs' strengths
+      const so = penaltyShootout(ctClub(gal, A), ctClub(gal, B), { seed: hashSeed(seed + ":ctpens:" + ct.koRound + ":" + i) });
+      w = so.winner === 0 ? A : B;
+    }
     next.push(w);
   }
   return { next, myFx };
@@ -929,6 +1061,7 @@ const Engine = {
   createMatch, simulateMatch, winProbs, makeWorld, computeTable, decisionOdds,
   REGION_LEAGUES, genStarterClubs,
   STARTER_CLUBS, EURO_CLUBS, SKILLS, SKILL_POS, skillsFor, skillLegal, skillsActive, skillMul,
+  DEF_SCENARIOS, defChoiceOdds, shootoutKickOdds, penaltyShootout,
   LEAGUE_DEFS, leagueForRegion, makeGalaxy, galaxySimMD, galaxyRollover,
   ctMake, ctClub, ctGroupFixtures, ctSimGroups, ctGroupTable, ctAdvanceToKO, ctSimKORound, CT_ROUNDS, CT_GROUP_AFTER_MD
 };

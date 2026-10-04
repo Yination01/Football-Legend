@@ -19,6 +19,15 @@
   - **Leaderboard seasons** — monthly snapshots + auto-gifts for top 3 (admin "Close season").
   - Fixed `app/copy-game.js` source path (`../game`).
 
+- **v1.6 (in code, unreleased) — Master Plan Wave 2:**
+  - **#1 Mid-match pause + tactics drawer** — BaL pause modal (score clock stamina role; resume, drawer, sub, auto-play) and a sliding drawer with `Engine.setRole()` switches that apply from the current minute; ML pause opens its tactical window on demand.
+  - **#11 Segmented match HUD** — scoreboard sub-line (role / commentary mode / knockout tag), control strip + bottom speed/sub bar, one honest sub path for HUD, drawer and modal.
+  - **#2 Half-time locker room** — clock halts at 45', real first-half stats, honest gaffer note, role choice for the second half.
+  - **#3 Extra time + interactive shootouts** — knockout ties play 120' (`ko: true`), then an honest `Engine.penaltyShootout()` whose exact kick list drives the UI, the summary and the rewards. All six former coin-flip tie-breaks removed (incl. AI-vs-AI CT ties).
+  - **#4 Key Highlights mode** — in-play replays skipped and stored as deterministic cuts, replayed in a post-match 2D reel; "Full Commentary" replays every shot live (`longCommentary` setting).
+  - **#5 Defender decision matrix** — tackle / jockey / step up / drop off across five scenarios, shown % == rolled % (measured over ~2.9k duels in `test-wave2.js`).
+  - New suite `game/test-wave2.js` (75 checks incl. DOM-hook integrity for both match screens).
+
 - **v1.6 (in code, unreleased) — Master Plan Wave 1:**
   - **#8 PES 5-direction form arrows** (⬆ ↗ ➡ ↘ ⬇) with seeded, deterministic drift; each arrow step is a real 1.5 OVR in `effOvr`.
   - **#7 Tactical counter system** surfaced as a full 4x4 matrix on the Tactics screen — identical to the +1.0/0/-1.0 baked into the shown odds.

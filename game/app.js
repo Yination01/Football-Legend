@@ -1017,9 +1017,14 @@ function injuredScreen() {
         const Hc = ctFx.ctHome ? myClub() : ctFx.oppClub, Ac = ctFx.ctHome ? ctFx.oppClub : myClub();
         const r = E.simulateMatch(Hc, Ac, { seed: E.hashSeed(S.seed + ":ctout:" + S.season + ":" + (ctFx.ctStage === "group" ? "g" + ctFx.ctMD : "k" + S.ct.koRound)), fast: true });
         let gH = r.gH, gA = r.gA;
-        if (ctFx.ctStage === "ko" && gH === gA) { if (Math.random() < 0.5) gH++; else gA++; }
+        let penNote = "";
+        if (ctFx.ctStage === "ko" && gH === gA) { // #3: honest shootout, never a coin flip
+          const so = E.penaltyShootout(Hc, Ac, { seed: E.hashSeed(S.seed + ":ctoutpens:" + S.season + ":" + S.ct.koRound) });
+          if (so.winner === 0) gH++; else gA++;
+          penNote = ` (${so.scoredH}-${so.scoredA} on penalties)`;
+        }
         balCtRecord(ctFx, gH, gA);
-        pushNews("\ud83c\udf0d CT night without the injured " + S.name + ": " + gH + "-" + gA + ".");
+        pushNews("\ud83c\udf0d CT night without the injured " + S.name + ": " + gH + "-" + gA + "." + penNote);
         S.injury--;
         S.condition = Math.min(100, S.condition + 30);
         S.trainedToday = false;
@@ -1036,8 +1041,13 @@ function injuredScreen() {
         const Ac = home ? S.world.clubs[oppIdx] : myClub();
         const r = E.simulateMatch(Hc, Ac, { seed: E.hashSeed(S.seed + ":cupout:" + S.season + S.cup.round), fast: true });
         let my = home ? r.gH : r.gA, op = home ? r.gA : r.gH;
-        if (my === op) { if (Math.random() < 0.5) my++; else op++; }
-        if (my > op) { S.cup.round++; pushNews(`\ud83c\udfc6 ${myClub().name} advance without the injured ${S.name}.`); if (S.cup.round >= 3) { S.flags.cupWinner = true; S.flags.cupsWon = (S.flags.cupsWon||0)+1; } }
+        let penNote = "";
+        if (my === op) { // #3: honest shootout, never a coin flip
+          const so = E.penaltyShootout(Hc, Ac, { seed: E.hashSeed(S.seed + ":cupoutpens:" + S.season + S.cup.round) });
+          if (so.winner === 0) my++; else op++;
+          penNote = ` (${so.scoredH}-${so.scoredA} on penalties)`;
+        }
+        if (my > op) { S.cup.round++; pushNews(`\ud83c\udfc6 ${myClub().name} advance without the injured ${S.name}.${penNote}`); if (S.cup.round >= 3) { S.flags.cupWinner = true; S.flags.cupsWon = (S.flags.cupsWon||0)+1; } }
         else { S.cup.alive = false; pushNews(`\ud83d\udc94 Cup exit while ${S.name} watched from the stands.`); }
       } else {
         for (const [h, a] of S.world.fixtures[S.matchday]) {
@@ -1203,7 +1213,8 @@ function matchScreen(fx, displayedProbs) {
   const isGK = S.pos === "GK";
   const match = E.createMatch(H, A, {
     seed, player: { pos: S.pos, playstyle: S.playstyle, eff: effStats(), skills: S.skills || [] }, playerTeam: isHome ? 0 : 1, role: S.role,
-    condition: S.condition, fitLvl: S.upgrades.fitness, medLvl: S.upgrades.medical
+    condition: S.condition, fitLvl: S.upgrades.fitness, medLvl: S.upgrades.medical,
+    ko: !!(fx.cup || (fx.ct && fx.ctStage === "ko")) // #3: knockout night = extra time, then penalties
   });
 
   const matchKey = fx.ct ? (fx.ctStage === "group" ? `s${S.season}:ctg${fx.ctMD}` : `s${S.season}:ctko${S.ct.koRound}`)
@@ -1212,6 +1223,10 @@ function matchScreen(fx, displayedProbs) {
   let momentActive = false;
   let viewMode = S.viewMode || "ticker"; // "ticker" | "live2d"
   const mstat = { shotsH: 0, shotsA: 0, sotH: 0, sotA: 0 };
+  const isKO = !!(fx.cup || (fx.ct && fx.ctStage === "ko"));
+  let paused = false, halfTimeShown = false, halfBase = null;
+  let hlMode = getSet().longCommentary === 1 ? "full" : "key"; // #4: "key" stores cuts, "full" replays every shot live
+  const hlQueue = [];
 
   setTimeout(() => {
     // ---- anti-replay: a match is consumed the moment it kicks off ----
@@ -2173,18 +2188,33 @@ function matchScreen(fx, displayedProbs) {
 
     function handleEvents(evts, thenResume) {
       let big = null;
-      const SHOT_TYPES = ["goal", "save", "miss"]; // real shot outcomes always eligible
+      const SHOT_TYPES = ["goal", "save", "miss"]; // real shot outcomes are the only highlight material
       for (const ev of evts) {
-        if (ev.type === "tackle" && ev.by === "you" && speed < 3 && Math.random() < 0.3) { big = big || ev; continue; } // your crunching tackles: occasional cutscene
+        if (ev.type === "tackle" && ev.by === "you" && hlMode === "key" && speed < 3 && Math.random() < 0.3) { big = big || ev; continue; }
         if (!SHOT_TYPES.includes(ev.type)) continue; // hold/dispossessed/card/setpiece/injury = ticker only
-        if (ev.type === "goal" || ((ev.by === "you" || ev.gk) && speed < 3 && Math.random() < 0.6)) big = ev;
+        if (ev.type === "goal") big = big || ev; // #4: goals always get their scene
+        else if (hlMode === "key" && (ev.by === "you" || ev.gk) && speed < 3 && Math.random() < 0.6) big = ev;
+      }
+      evts.forEach(describe);
+      const stored = hlMode === "key" ? evts.filter(ev => SHOT_TYPES.includes(ev.type) && ev !== big) : [];
+      stored.forEach(ev => hlQueue.push(ev)); // #4: deterministic cuts replayed after the whistle
+      const reels = hlMode === "full" ? evts.filter(ev => SHOT_TYPES.includes(ev.type) && ev !== big) : [];
+      function afterLive() {
+        if (!reels.length) { if (match.state.done) endMatch(); else runClock(); return; }
+        let i = 0;
+        (function nextReel() {
+          if (i >= reels.length) { if (match.state.done) endMatch(); else runClock(); return; }
+          playMoment(reels[i++], nextReel); // full mode: every other shot gets a scene too
+        })();
       }
       if (big && speed < 3 && getSet().cutscenes !== false) {
         clearInterval(timer);
-        playMoment(big, () => { evts.forEach(describe); if (match.state.done) endMatch(); else runClock(); });
-      } else {
-        evts.forEach(describe);
-        if (thenResume) { /* clock already running */ }
+        playMoment(big, afterLive);
+      } else if (reels.length && speed < 3 && getSet().cutscenes !== false) {
+        clearInterval(timer);
+        afterLive();
+      } else if (stored.length && speed < 3) {
+        addTick(match.state.min, `\u23e9 ${stored.length} highlight${stored.length > 1 ? "s" : ""} saved for the post-match reel`, "");
       }
     }
 
@@ -2217,6 +2247,15 @@ function matchScreen(fx, displayedProbs) {
         buttons = [["left", "\u2b05\ufe0f DIVE LEFT", "~" + odds.dive + "% save"],
                    ["right", "\u27a1\ufe0f DIVE RIGHT", "~" + odds.dive + "% save"],
                    ["stay", "\ud83e\uddcd STAND TALL", "~" + odds.stay + "% save"]];
+      } else if (dec.type === "def") { // #5: the whole defensive decision matrix, odds straight from the engine
+        const D = odds.def || { tackle: {}, jockey: {}, step: {}, drop: {} };
+        scenLabel = (dec.scen ? dec.scen.label : "They come at you!") + " \u2014 read it and commit.";
+        buttons = [
+          ["tackle", "\ud83e\uddb5 TACKLE \u00b7 DEF+PHY", `${D.tackle.win}% win \u00b7 ${D.tackle.foul}% foul risk`],
+          ["jockey", "\ud83c\udfaf JOCKEY \u00b7 DEF+PAC", `${D.jockey.win}% win \u00b7 never a foul`],
+          ["step", "\u26a1 STEP UP \u00b7 DEF+PAC", `${D.step.win}% win \u00b7 ${D.step.foul}% foul \u00b7 wins a counter`],
+          ["drop", "\ud83d\udee1\ufe0f DROP OFF \u00b7 DEF", `${D.drop.win}% win \u00b7 beaten only on a 0.7\u00d7 chance`]
+        ];
       } else if (isGK) {
         scenLabel = dec.scen ? dec.scen.label : "Shot incoming!";
         buttons = [["stay", "\ud83e\udde4 STAY BIG", odds.stay + "% save"],
@@ -2239,7 +2278,7 @@ function matchScreen(fx, displayedProbs) {
       decEl.style.display = "block";
       decEl.innerHTML = `
         <div class="decision-head">\u23f8 ${match.state.min}' \u2014 ${scenLabel}</div>
-        <div class="sub center" style="margin-bottom:8px">${odds.xg ? `Chance quality: <b>${odds.xg}%</b>` : "Dead-ball situation"}${stamNote} \u00b7 match paused</div>
+        <div class="sub center" style="margin-bottom:8px">${odds.xg ? (dec.type === "def" ? `If you're beaten: <b>${odds.xg}%</b> chance against` : `Chance quality: <b>${odds.xg}%</b>`) : "Dead-ball situation"}${stamNote} \u00b7 match paused</div>
         <div class="btnrow decgrid">
           ${buttons.map(([id, label, sub]) => `<button class="btn ${id === "shoot" || id === "stay" ? "" : "secondary"} decbtn" data-dec="${id}">${label}<span class="decodds">${sub}</span></button>`).join("")}
         </div>`;
@@ -2260,14 +2299,134 @@ function matchScreen(fx, displayedProbs) {
       matchOver = true;
       clearInterval(timer); clearInterval(decisionTimer);
       const r = match.result();
-      addTick(90, `<b>FULL TIME.</b> ${H.short} ${r.gH} - ${r.gA} ${A.short}`, "goal");
+      let pens = null;
+      if (isKO && r.level) { // #3: level after extra time -> penalties, one honest roll per kick
+        pens = E.penaltyShootout(H, A, { seed: E.hashSeed(seed + ":pens") });
+        r.pens = true; r.penWinner = pens.winner; r.penScore = [pens.scoredH, pens.scoredA];
+        addTick(120, "\ud83e\udd85 Level after extra time \u2014 penalties it is.", "goal");
+      }
+      const ftMin = r.et ? 120 : 90;
+      addTick(ftMin, `<b>${r.et ? "END OF EXTRA TIME" : "FULL TIME"}.</b> ${H.short} ${r.gH} - ${r.gA} ${A.short}${pens ? ` \u00b7 pens ${pens.scoredH}-${pens.scoredA}` : ""}`, "goal");
       Snd.fulltime();
       renderMstats();
+      function ftPanel() {
+        const win = pens ? (pens.winner === 0 ? H.short : A.short) : null;
+        decEl.style.display = "block";
+        decEl.innerHTML = `<div class="scenline">\ud83c\udfc1 ${r.et ? "AFTER EXTRA TIME" : "FULL TIME"} \u00b7 ${H.short} ${r.gH} - ${r.gA} ${A.short}${pens ? ` (${pens.scoredH}-${pens.scoredA} pens)` : ""}</div>
+          ${pens ? `<p class="sub" style="margin:4px 0 0"><b>${win} win the shootout.</b> Every kick you just saw was the engine's own conversion roll.</p>` : ""}
+          <p class="sub" style="margin:4px 0 8px">Scroll the ticker to review the match events, then continue when ready.${hlQueue.length ? ` \u00b7 ${hlQueue.length} highlight${hlQueue.length > 1 ? "s" : ""} stored` : ""}</p>
+          ${hlQueue.length ? `<button class="btn secondary" id="hlreel">\ud83c\udfac WATCH HIGHLIGHTS (${hlQueue.length})</button>` : ""}
+          <button class="btn" id="ftcontinue">CONTINUE \u2794 MATCH SUMMARY</button>`;
+        document.querySelector("#ftcontinue").onclick = () => finishMatch(fx, r, displayedProbs);
+        const hr = document.querySelector("#hlreel");
+        if (hr) hr.onclick = () => runReel(ftPanel);
+      }
+      function afterShootout() {
+        if (hlQueue.length) { decEl.style.display = "block"; decEl.innerHTML = `<div class="scenline">\ud83c\udfac KEY HIGHLIGHTS \u00b7 ${hlQueue.length} moment${hlQueue.length > 1 ? "s" : ""}</div>
+          <p class="sub" style="margin:4px 0 8px">Highlights mode skipped the in-play replays and stored every real event \u2014 including the ones the ticker only described.</p>
+          <button class="btn" id="hlplay">\u25b6 PLAY HIGHLIGHTS</button>
+          <button class="btn secondary" id="hlskip">SKIP TO SUMMARY \u2794</button>`;
+          document.querySelector("#hlskip").onclick = ftPanel;
+          document.querySelector("#hlplay").onclick = () => runReel(ftPanel);
+        } else ftPanel();
+      }
       decEl.style.display = "block";
-      decEl.innerHTML = `<div class="scenline">\ud83c\udfc1 FULL TIME \u00b7 ${H.short} ${r.gH} - ${r.gA} ${A.short}</div>
-        <p class="sub" style="margin:4px 0 8px">Scroll the ticker to review the match events, then continue when ready.</p>
-        <button class="btn" id="ftcontinue">CONTINUE \u2794 MATCH SUMMARY</button>`;
-      document.querySelector("#ftcontinue").onclick = () => finishMatch(fx, r, displayedProbs);
+      if (pens) showShootout(pens, afterShootout); else afterShootout();
+    }
+    // ---------- #3 shootout presentation (reads the already-computed kick list) ----------
+    function showShootout(sol, done) {
+      decEl.style.display = "block";
+      decEl.innerHTML = `<div class="scenline">\ud83e\udd85 PENALTY SHOOTOUT \u00b7 ${H.short} vs ${A.short}</div>
+        <p class="sub" style="margin:4px 0 8px">Level after ${sol.rounds > 5 ? "12" : "120"}\u2032. Each dot is one kick, with the exact conversion % the engine rolled.</p>
+        <div class="sotrow" id="sotrow"></div>
+        <div class="sub" id="sotline" style="margin-top:6px">The run-ups begin...</div>`;
+      const row = $("#sotrow");
+      let i = 0;
+      function kick() {
+        if (i >= sol.kicks.length) {
+          const w = sol.winner === 0 ? H.short : A.short;
+          $("#sotline").innerHTML = `<b>${w} win ${Math.max(sol.scoredH, sol.scoredA)}-${Math.min(sol.scoredH, sol.scoredA)}</b>${sol.suddenDeath ? " after sudden death" : ""}.`;
+          setTimeout(done, 1000);
+          return;
+        }
+        const k = sol.kicks[i++];
+        const d = document.createElement("span");
+        d.className = "sotdot " + (k.scored ? "ok" : "no");
+        d.textContent = k.scored ? "\u26bd" : "\u2715";
+        d.title = (k.side === 0 ? H.short : A.short) + " \u00b7 " + k.p + "% conversion";
+        row.appendChild(d);
+        $("#sotline").textContent = `${k.side === 0 ? H.short : A.short} ${k.scored ? "SCORE" : "MISS"} \u00b7 ${k.p}% conversion \u00b7 ${sol.scoredH}-${sol.scoredA}`;
+        setTimeout(kick, 640);
+      }
+      kick();
+    }
+    // ---------- #4 2D highlight reel (deterministic cuts, one per stored event) ----------
+    function runReel(done) {
+      const CW = 800, CH = 480;
+      canvas.style.display = "block"; canvas.width = CW; canvas.height = CH;
+      const DUR = 2100;
+      let i = 0, started = 0;
+      decEl.innerHTML = `<div class="scenline">\ud83c\udfac REPLAYING HIGHLIGHTS</div><p class="sub center" id="hlnow"></p>`;
+      function pt(wx, wy, wz) {
+        const d = wx / 100, e = 1 - Math.pow(1 - d, 1.35);
+        const sy = 470 + (110 - 470) * e, w = 940 + (440 - 940) * e, s = 0.55 + (1 - d) * 0.75;
+        return { x: CW / 2 + (wy / 100 - .5) * w, y: sy - (wz || 0) * s * 2.2, s };
+      }
+      function draw(ev, t) {
+        ctx.clearRect(0, 0, CW, CH);
+        const sky = ctx.createLinearGradient(0, 0, 0, 74);
+        sky.addColorStop(0, "#0a1220"); sky.addColorStop(1, "#1a2a38");
+        ctx.fillStyle = sky; ctx.fillRect(0, 0, CW, 74);
+        for (let k = 0; k < 170; k++) {
+          const lit = ev.type === "goal" ? (k % 3 === 0) : (k % 9 === 0);
+          ctx.fillStyle = lit ? "rgba(255,215,110,.5)" : "rgba(255,255,255,.13)";
+          ctx.fillRect((k * 137) % CW, 8 + ((k * 53) % 58), 2.6, 2.6);
+        }
+        for (let s2 = 0; s2 < 9; s2++) {
+          const a = pt(s2 / 9 * 100, 0, 0), b = pt(s2 / 9 * 100, 100, 0), c = pt((s2 + 1) / 9 * 100, 100, 0), d2 = pt((s2 + 1) / 9 * 100, 0, 0);
+          ctx.fillStyle = s2 % 2 ? "#0e6a30" : "#13883d";
+          ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.lineTo(c.x, c.y); ctx.lineTo(d2.x, d2.y); ctx.closePath(); ctx.fill();
+        }
+        ctx.strokeStyle = "rgba(255,255,255,.6)"; ctx.lineWidth = 2;
+        const c1 = pt(50, 0, 0), c2p = pt(50, 100, 0);
+        ctx.beginPath(); ctx.moveTo(c1.x, c1.y); ctx.lineTo(c2p.x, c2p.y); ctx.stroke();
+        const gl = pt(100, 36, 0), gr = pt(100, 64, 0), bh = 30;
+        ctx.lineWidth = 4; ctx.strokeStyle = "#f2f2f2";
+        ctx.beginPath(); ctx.moveTo(gl.x, gl.y - bh); ctx.lineTo(gr.x, gr.y - bh); ctx.lineTo(gr.x, gr.y); ctx.lineTo(gl.x, gl.y); ctx.stroke();
+        const onTarget = ev.type === "goal" || ev.type === "save";
+        const col = ev.team === 0 ? H.col1 : A.col1, col2 = ev.team === 0 ? A.col1 : H.col1;
+        const y0 = 32 + (ev.min % 5) * 9;
+        const bx = onTarget ? 24 + 72 * t : 40 + 26 * t;
+        const by = y0 + (onTarget ? 4 * t : -6 * t);
+        const bz = ev.type === "goal" ? 5 * Math.sin(Math.PI * t) : ev.type === "miss" ? 30 * t : ev.type === "save" ? 9 * t : 7 * Math.sin(Math.PI * t);
+        function dot(wx, wy, wz, color, r) { const p = pt(wx, wy, wz); ctx.beginPath(); ctx.arc(p.x, p.y, r * p.s, 0, 7); ctx.fillStyle = color; ctx.fill(); }
+        dot(78 - (onTarget ? 34 * t : 16 * t), y0 - 5, 0, col, 13);                                   // attacker (you/them)
+        dot(78 - (onTarget ? 30 * t : 20 * t), y0 + 15, 0, col2, 13);                                 // defender closing
+        const dive = ev.type === "save" ? (ev.min % 2 ? -7 : 7) * Math.min(1, t * 1.7) : 0;
+        dot(95, 50 + dive, ev.type === "save" ? 9 * Math.min(1, t * 1.7) : 0, "#ffd75e", 13);          // keeper
+        dot(bx, by, bz, "#ffffff", 5);                                                                // ball
+        if (ev.type === "goal" && t > 0.75) { ctx.fillStyle = "rgba(255,215,110,.85)"; ctx.font = "bold 46px system-ui, sans-serif"; ctx.fillText("GOAL!", CW / 2 - 90, 120); }
+        const label = `${ev.min}' \u00b7 ` + (ev.type === "goal"
+          ? (ev.by === "you" ? S.name.toUpperCase() + " SCORES!" : "GOAL \u2014 " + (ev.team === 0 ? H.short : A.short))
+          : ev.type === "save" ? (ev.gk === "save" ? S.name.toUpperCase() + " SAVES!" : "BIG SAVE \u2014 " + (ev.team === 0 ? A.short : H.short))
+          : ev.by === "you" ? S.name.toUpperCase() + " GOES CLOSE" : "OFF TARGET");
+        ctx.fillStyle = "rgba(0,0,0,.5)"; ctx.fillRect(0, CH - 54, CW, 54);
+        ctx.fillStyle = "#fff"; ctx.font = "bold 24px system-ui, sans-serif";
+        ctx.fillText(label, 20, CH - 20);
+      }
+      function tick() {
+        const now = Date.now(); if (!started) started = now;
+        const t = Math.min(1, (now - started) / DUR);
+        const ev = hlQueue[i];
+        const now2 = $("#hlnow"); if (now2) now2.textContent = `Highlight ${i + 1} of ${hlQueue.length} \u00b7 ${ev.min}'`;
+        draw(ev, t < 0.15 ? 0 : (t - 0.15) / 0.85);
+        if (t >= 1) {
+          i++; started = now;
+          if (i >= hlQueue.length) { canvas.style.display = "none"; done(); return; }
+        }
+        setTimeout(tick, 16);
+      }
+      tick();
     }
 
     let momentSince = 0;
@@ -2278,9 +2437,9 @@ function matchScreen(fx, displayedProbs) {
         else { return; }
       } else momentSince = 0;
       if (match.state.pending) { clearInterval(timer); timer = null; return; }
+      if (match.state.min === 45 && !halfTimeShown && !match.state.done) { showHalfTime(); return; } // #2
       const s = match.step();
       clockEl.textContent = s.min + "'";
-      if (s.min === 45) addTick(45, "Half-time. Catch your breath.", "");
       momEl.style.width = (isHome ? match.state.momentum : 100 - match.state.momentum) + "%";
       updateAtkState(s.events);
       atk.momHist.push(match.state.momentum); if (atk.momHist.length > 40) atk.momHist.shift();
@@ -2290,7 +2449,7 @@ function matchScreen(fx, displayedProbs) {
         stripEl.innerHTML = `<span class="atkarrows ${L.danger ? "danger" : ""}" style="${L.dirRight ? "" : "transform:scaleX(-1)"}">${L.attacking ? "\u25b6\u25b6\u25b6" : "\u25c6"}</span> ${L.txt}`;
         stripEl.className = "atkstrip" + (L.danger ? " danger" : L.attacking ? " on" : "");
       }
-      if (s.min % 3 === 0) renderMstats();
+      if (s.min % 3 === 0) { renderMstats(); const dr = $("#drawer"); if (dr && dr.classList.contains("open")) renderDrawer(); }
       if (s.events.length) handleEvents(s.events, true);
       if (s.decision) {
         if (speed === 3) { // skip mode: auto everything
@@ -2306,14 +2465,17 @@ function matchScreen(fx, displayedProbs) {
       if (match.state.pending) return; // decision owns the flow
       timer = setInterval(step, speed === 0.5 ? 640 : speed === 1 ? 320 : speed === 2 ? 120 : 20);
     }
-    $("#subbtn").onclick = () => {
+    function doSub() { // #1: one honest sub path for the HUD bar, drawer and pause modal
       const sev = match.requestSub && match.requestSub();
-      if (!sev) { toast("Can't sub right now"); return; }
+      if (!sev) { toast("Can't sub off right now \u2014 wait for a stoppage or you're already off."); return false; }
       describe(sev);
       renderMstats();
-      $("#subbtn").disabled = true; $("#subbtn").style.opacity = .4;
+      const sb = $("#subbtn"); if (sb) { sb.disabled = true; sb.style.opacity = .4; }
+      const ds = $("#drawersub"); if (ds) { ds.disabled = true; ds.style.opacity = .4; }
       toast("\ud83d\udd01 Subbed off \u2014 stamina preserved for next match");
-    };
+      return true;
+    }
+    $("#subbtn").onclick = doSub;
     document.querySelectorAll("[data-view]").forEach(b => b.onclick = () => {
       viewMode = b.dataset.view;
       S.viewMode = viewMode; save();
@@ -2325,6 +2487,121 @@ function matchScreen(fx, displayedProbs) {
       document.querySelectorAll("[data-speed]").forEach(x => x.classList.toggle("on", +x.dataset.speed === speed));
       if (!match.state.pending) runClock();
     });
+    // ---------- #11 segmented HUD helpers ----------
+    function roleLabel(id) { return ((E.rolesFor(S.pos)[id] || E.ROLES[id] || {}).label) || id; }
+    function roleEffectTxt() {
+      const r0 = E.rolesFor(S.pos)[S.role] || E.ROLES.balanced;
+      const bits = [];
+      if (r0.involve != null && r0.involve !== 1) bits.push((r0.involve > 1 ? "+" : "") + Math.round((r0.involve - 1) * 100) + "% involvement");
+      if (r0.tackleFreq && r0.tackleFreq !== 1) bits.push("\u00d7" + r0.tackleFreq + " duels");
+      if (r0.tackleAdj) bits.push((r0.tackleAdj > 0 ? "+" : "") + Math.round(r0.tackleAdj * 100) + "pp duel win");
+      if (r0.gkBlunderMul && r0.gkBlunderMul !== 1) bits.push("\u00d7" + r0.gkBlunderMul + " blunder risk");
+      if (r0.risk !== 1) bits.push("\u00d7" + r0.risk + " stamina use");
+      return bits.join(" \u00b7 ") || "no modifiers \u2014 neutral role";
+    }
+    function syncHudLine() {
+      const el = $("#hudrole"); if (el) el.textContent = roleLabel(S.role);
+      const mb = $("#hudmode"); if (mb) mb.textContent = hlMode === "full" ? "Full commentary" : "Key highlights";
+      const bt = $("#modebtn"); if (bt) bt.textContent = hlMode === "full" ? "📻 Full Commentary" : "⏩ Key Highlights";
+    }
+    function renderDrawer() {
+      const rl = E.rolesFor(S.pos), box = $("#drawerrole");
+      if (!box) return;
+      box.innerHTML = Object.keys(rl).map(id => `<button class="drawerrole ${id === S.role ? "sel" : ""}" data-role="${id}">${rl[id].label}<span class="sub">${rl[id].desc}</span></button>`).join("");
+      box.querySelectorAll("[data-role]").forEach(b => b.onclick = () => {
+        S.role = b.dataset.role; save();
+        if (match.setRole) match.setRole(S.role); // engine swaps the role profile from this minute on
+        renderDrawer(); syncHudLine();
+        toast(`\ud83e\udde0 ${roleLabel(S.role)} \u2014 active now and kept for the season`);
+      });
+      const st2 = match.state;
+      const info = $("#drawerinfo");
+      if (info) info.innerHTML = `
+        <div class="kv"><span>Stamina</span><b style="color:${st2.stamina < 55 ? "var(--red)" : "var(--green)"}">${Math.round(st2.stamina)}%</b></div>
+        <div class="kv"><span>Goals / Assists</span><b>${st2.pGoals} / ${st2.pAssists}</b></div>
+        <div class="kv"><span>Shots / Key passes</span><b>${st2.pShots} / ${st2.pKeyPasses}</b></div>
+        <div class="kv"><span>${isGK ? "Saves" : "Tackles won"}</span><b>${isGK ? st2.pSaves : (st2.pTackles || 0)}</b></div>
+        <div class="kv"><span>Rating</span><b>${st2.rating.toFixed(1)}</b></div>
+        <div class="kv"><span>Role effect</span><b class="sub">${roleEffectTxt()}</b></div>`;
+      const why = $("#drawerwhy");
+      if (why) why.innerHTML = st2.recycle > 0
+        ? "\ud83d\udee1\ufe0f <b>Counter window live:</b> you kept the ball, so a fresh chance is queued and it will be yours \u2014 with \u00d71.3 quality."
+        : "No hidden numbers anywhere: every % on a decision button is exactly what the engine rolls.";
+    }
+    function openTactics() { renderDrawer(); const d = $("#drawer"); if (d) d.classList.add("open"); }
+    function hideTactics() { const d = $("#drawer"); if (d) d.classList.remove("open"); }
+    // ---------- #1 pause modal ----------
+    function refreshPause() {
+      const st2 = match.state;
+      const a = $("#pmin"), b = $("#pscore"), c = $("#pstam"), d = $("#prole");
+      if (a) a.textContent = st2.min + "'";
+      if (b) b.textContent = st2.gH + " - " + st2.gA;
+      if (c) c.textContent = Math.round(st2.stamina) + "%";
+      if (d) d.textContent = roleLabel(S.role);
+    }
+    function setPaused(v) {
+      if (matchOver || match.state.done) return;
+      if (v && match.state.pending) { toast("Take your decision first \u2014 the match is already paused for you."); return; }
+      paused = v;
+      const pe = $("#pausemodal"); if (pe) pe.style.display = v ? "flex" : "none";
+      if (v) { clearInterval(timer); timer = null; refreshPause(); }
+      else { if (!match.state.pending) runClock(); }
+    }
+    { // wire the control strip, drawer and modal
+      const pb = $("#pausbtn"); if (pb) pb.onclick = () => setPaused(true);
+      const pr = $("#presume"); if (pr) pr.onclick = () => setPaused(false);
+      const pt = $("#ptactics"); if (pt) pt.onclick = () => openTactics();
+      const ps = $("#psub"); if (ps) ps.onclick = () => { if (doSub()) setPaused(false); };
+      const pk = $("#pskip"); if (pk) pk.onclick = () => {
+        setPaused(false); speed = 3;
+        document.querySelectorAll("[data-speed]").forEach(x => x.classList.toggle("on", +x.dataset.speed === 3));
+        if (!match.state.pending) runClock();
+        toast("\ud83e\udd16 Auto-play on \u2014 every decision is still resolved by the honest engine roll.");
+      };
+      const tb = $("#tacbtn"); if (tb) tb.onclick = () => openTactics();
+      const dx = $("#drawerx"); if (dx) dx.onclick = () => hideTactics();
+      const ds = $("#drawersub"); if (ds) ds.onclick = () => doSub();
+      const mb = $("#modebtn"); if (mb) mb.onclick = () => { // #4 commentary / highlights mode
+        hlMode = hlMode === "full" ? "key" : "full";
+        setSet("longCommentary", hlMode === "full" ? 1 : 0);
+        syncHudLine();
+        toast(hlMode === "key"
+          ? "\u23e9 Key Highlights \u2014 replays are skipped live and stored for a post-match reel."
+          : "\ud83d\udcfb Full Commentary \u2014 every shot gets its scene. The clock waits for each replay.");
+      };
+      syncHudLine();
+    }
+    // ---------- #2 half-time locker room ----------
+    function showHalfTime() {
+      halfTimeShown = true;
+      clearInterval(timer); timer = null;
+      const st2 = match.state;
+      const myH = isHome ? st2.gH : st2.gA, opH = isHome ? st2.gA : st2.gH;
+      halfBase = { pShots: st2.pShots, pTackles: st2.pTackles || 0, pKeyPasses: st2.pKeyPasses, pSaves: st2.pSaves };
+      const note = (st2.pShots >= 2 && st2.pGoals === 0) ? "You're getting into the right spots \u2014 keep shooting, the numbers say one drops."
+        : (st2.pTackles || 0) >= 2 ? "They keep running into you. Keep winning it back."
+        : st2.stamina < 58 ? "You look leggy out there \u2014 pick a role that spends less and trust your moment."
+        : (st2.gkSaves || 0) >= 1 ? "You've already bailed us out once. Stay big."
+        : "Trust the process. Take your moments when they come.";
+      const row = (id, label, desc) => `<button class="drawerrole ${id === S.role ? "sel" : ""}" data-ht="${id}">${label}<span class="sub">${desc}</span></button>`;
+      addTick(45, "Half-time. The gaffer wants a word.", "");
+      decEl.style.display = "block";
+      decEl.innerHTML = `
+        <div class="decision-head">\ud83d\udeaa HALF-TIME \u00b7 ${H.short} ${st2.gH} - ${st2.gA} ${A.short}</div>
+        <div class="sub center" style="margin-bottom:8px">${myH > opH ? "We lead " + myH + "-" + opH : myH === opH ? "Level at " + myH + "-" + opH : "We trail " + opH + "-" + myH} \u00b7 you: ${st2.pGoals}G ${st2.pAssists}A, rating ${st2.rating.toFixed(1)}, stamina ${Math.round(st2.stamina)}%</div>
+        <p class="sub" style="margin:0 0 8px"><b>Gaffer:</b> ${note}</p>
+        <div class="btnrow decgrid">${Object.keys(E.rolesFor(S.pos)).map(id => row(id, E.rolesFor(S.pos)[id].label, E.rolesFor(S.pos)[id].desc)).join("")}</div>
+        <p class="sub" style="margin:8px 0 0">The choice applies from minute 46 and stays your role for the rest of the season. Change it any time from the tactics drawer.</p>
+        <button class="btn" id="htgo">\u25b6 SECOND HALF</button>`;
+      decEl.querySelectorAll("[data-ht]").forEach(b => b.onclick = () => {
+        S.role = b.dataset.ht; save();
+        if (match.setRole) match.setRole(S.role);
+        toast(`\ud83e\udde0 ${roleLabel(S.role)} for the second half.`);
+        decEl.querySelectorAll("[data-ht]").forEach(x => x.classList.toggle("sel", x.dataset.ht === S.role));
+        syncHudLine();
+      });
+      $("#htgo").onclick = () => { decEl.style.display = "none"; decEl.innerHTML = ""; if (match.state.pending) return; runClock(); };
+    }
     try { Snd.kickoff(); } catch (e) { console.warn("Audio kickoff failed:", e); }
     addTick(0, `Kick off! Displayed odds were ${displayedProbs.home}/${displayedProbs.draw}/${displayedProbs.away}. ${isGK ? "Between the sticks today — stay sharp." : "Your moment — take your chances when they come."}`, "");
     runClock();
@@ -2336,10 +2613,12 @@ function matchScreen(fx, displayedProbs) {
       <span class="score" id="score">0 - 0</span>
       <span class="clock" id="clock">0'</span>
       <span class="tm" style="color:${A.col1 === "#000000" ? "#fff" : A.col1}">${A.short}</span>
-    </div>
-    <div class="viewrow">
-      <button class="btn secondary" data-view="ticker">\ud83d\udcfb Commentary</button>
-      <button class="btn secondary" data-view="live2d">\ud83c\udfae 2D Live</button>
+    
+      <div class="hudline"><span id="hudrole">role</span> · <span id="hudmode">key highlights</span>${isKO ? ' · <b style="color:var(--gold)">KNOCKOUT</b> — extra time, then penalties if level' : ""}</div></div>
+    <div class="hudctl">
+      <button class="hudbtn" id="tacbtn">🎯 TACTICS</button>
+      <button class="hudbtn" id="modebtn">⏩ Key Highlights</button>
+      <button class="hudbtn" id="pausbtn">⏸ PAUSE</button>
     </div>
     <canvas id="live2d" width="800" height="520" style="display:none"></canvas>
     <canvas id="pitch"></canvas>
@@ -2351,12 +2630,40 @@ function matchScreen(fx, displayedProbs) {
     <div class="panel mstats" id="mstats"></div>
     <div class="atkstrip" id="atkstrip"></div>
     <div class="ticker" id="ticker"></div>
-    <div class="speedrow">
+    <div class="speedrow hudbar">
       <button class="btn secondary" data-speed="0.5">\ud83d\udc22 \u00bdx</button>
       <button class="btn secondary on" data-speed="1">▶ 1x</button>
       <button class="btn secondary" data-speed="2">⏩ 2x</button>
       <button class="btn secondary" data-speed="3">\ud83e\udd16 AUTO</button>
       <button class="btn secondary" id="subbtn" style="border-color:rgba(255,170,80,.5)">\ud83d\udd01 SUB</button>
+    </div>
+    </div>
+    <div class="drawer" id="drawer">
+      <div class="drawerhead"><b>🎯 MATCH TACTICS</b><button class="drawerx" id="drawerx">✕</button></div>
+      <p class="sub" style="margin:0 0 6px">Role — applies from the current minute and sticks for the season.</p>
+      <div class="drawerroles" id="drawerrole"></div>
+      <div class="drawerstats" id="drawerinfo"></div>
+      <p class="sub" id="drawerwhy" style="margin:8px 0"></p>
+      <p class="sub" style="margin:0 0 4px">View</p>
+      <div class="drawerroles">
+        <button class="drawerrole" data-view="ticker">📻 Commentary</button>
+        <button class="drawerrole" data-view="live2d">🎮 2D Live</button>
+      </div>
+      <button class="btn secondary" id="drawersub">🔁 Substitute me off</button>
+      <p class="sub" style="margin-top:6px">The drawer never stops the clock — use PAUSE for that.</p>
+    </div>
+    <div class="pausemodal" id="pausemodal" style="display:none">
+      <div class="pausecard">
+        <div class="decision-head">⏸ PAUSED</div>
+        <div class="kv"><span>Minute</span><b id="pmin">0'</b></div>
+        <div class="kv"><span>Score</span><b id="pscore">0 - 0</b></div>
+        <div class="kv"><span>Stamina</span><b id="pstam">100%</b></div>
+        <div class="kv"><span>Role</span><b id="prole">Balanced</b></div>
+        <button class="btn" id="presume">▶ RESUME</button>
+        <button class="btn secondary" id="ptactics">🎯 Open tactics drawer</button>
+        <button class="btn secondary" id="psub">🔁 Substitute me off</button>
+        <button class="btn secondary" id="pskip">🤖 Auto-play remainder</button>
+      </div>
     </div>
   </div>`;
 }
@@ -2366,10 +2673,17 @@ function finishMatch(fx, result, displayedProbs) {
   S.mdLock = null; // committed: quitting/back can no longer touch this result
   const isHome = fx.ct ? fx.ctHome : fx.home === S.clubIdx;
   let my = isHome ? result.gH : result.gA, op = isHome ? result.gA : result.gH;
-  if ((fx.cup || (fx.ct && fx.ctStage === "ko")) && my === op) { // ties go to penalties (honest, strength-weighted)
-    const meStr = myClub().str, opStr = fx.ct ? fx.oppClub.str : S.world.clubs[isHome ? fx.away : fx.home].str;
-    const pWin = meStr / (meStr + opStr);
-    if (Math.random() < pWin) my++; else op++;
+  if ((fx.cup || (fx.ct && fx.ctStage === "ko")) && my === op) { // #3: decided by the SAME shootout the player watched, or an honest one
+    let iWin;
+    if (result.penWinner != null) {
+      iWin = (result.penWinner === 0) === isHome; // reuse the exact kick list from endMatch
+    } else {
+      const oppC = fx.ct ? fx.oppClub : S.world.clubs[isHome ? fx.away : fx.home];
+      const so = E.penaltyShootout(myClub(), oppC, { seed: E.hashSeed(S.seed + ":pens:" + (fx.cup ? "cup" + S.cup.round : "ctko" + S.ct.koRound)) });
+      iWin = so.winner === 0;
+      result.penScore = [so.scoredH, so.scoredA];
+    }
+    if (iWin) my++; else op++;
     result.pens = true;
   }
   const res = my > op ? "W" : my === op ? "D" : "L";
@@ -2948,7 +3262,11 @@ function balResolveAbandoned() {
     const Hc = L.ctHome ? myClub() : fx.oppClub, Ac = L.ctHome ? fx.oppClub : myClub();
     const r = E.simulateMatch(Hc, Ac, { seed: E.hashSeed(S.seed + ":aband:" + L.key), fast: true });
     let gH = r.gH, gA = r.gA;
-    if (L.ctStage === "ko" && gH === gA) { if (Math.random() < 0.5) gH++; else gA++; } // pens
+    if (L.ctStage === "ko" && gH === gA) { // #3: honest shootout on the abandoned path too
+      const so = E.penaltyShootout(Hc, Ac, { seed: E.hashSeed(S.seed + ":abandpens:ct" + S.ct.koRound) });
+      if (so.winner === 0) gH++; else gA++;
+      pushNews(`\ud83e\udd85 The CT tie went to penalties: ${so.scoredH}-${so.scoredA}.`);
+    }
     balCtRecord(fx, gH, gA);
     const my2 = L.ctHome ? gH : gA, op2 = L.ctHome ? gA : gH;
     S.lastFive.push(my2 > op2 ? "W" : my2 === op2 ? "D" : "L"); if (S.lastFive.length > 5) S.lastFive.shift();
@@ -2962,7 +3280,12 @@ function balResolveAbandoned() {
   const isHome = fx.home === S.clubIdx;
   let my = isHome ? r.gH : r.gA, op = isHome ? r.gA : r.gH;
   if (fx.cup) {
-    if (my === op) { if (Math.random() < 0.5) my++; else op++; }
+    if (my === op) { // #3: honest shootout on the abandoned path too
+      const oppC = S.world.clubs[isHome ? fx.away : fx.home];
+      const so = E.penaltyShootout(myClub(), oppC, { seed: E.hashSeed(S.seed + ":abandpens:cup" + S.cup.round) });
+      if (so.winner === 0) my++; else op++;
+      pushNews(`\ud83e\udd85 That cup tie went to penalties: ${so.scoredH}-${so.scoredA}.`);
+    }
     if (my > op) S.cup.round++; else S.cup.alive = false;
     if (S.cup.round >= 3 && S.cup.alive) { S.flags.cupWinner = true; S.flags.cupsWon = (S.flags.cupsWon || 0) + 1; }
   } else {
@@ -4352,6 +4675,7 @@ function settingsScreen() {
     };
     $("#errclear").onclick = () => { localStorage.removeItem("flErrLog"); toast("Log cleared"); render(settingsScreen); };
     $("#tgcut").onclick = () => { setSet("cutscenes", !(getSet().cutscenes !== false)); render(settingsScreen); };
+    $("#tgmode").onclick = () => { setSet("longCommentary", getSet().longCommentary === 1 ? 0 : 1); render(settingsScreen); }; // #4 default commentary mode
     $("#mkbak").onclick = () => {
       const pack = { v: 1, t: Date.now(), bal: localStorage.getItem(SAVE_KEY), ml: localStorage.getItem("footballLegendML_v1") };
       $("#bakout").value = btoa(unescape(encodeURIComponent(JSON.stringify(pack))));
@@ -4452,6 +4776,7 @@ function settingsScreen() {
       <div class="kv"><span>\ud83e\ude7a Error log (${(() => { try { return JSON.parse(localStorage.getItem("flErrLog") || "[]").length; } catch (e) { return 0; } })()} entries)</span><span><button class="btn secondary" id="errcopy">COPY</button> <button class="btn secondary" id="errclear">CLEAR</button></span></div>
       <p class="sub">If something breaks, tap COPY and send the text to the developer.</p>
       <div class="kv"><span>\ud83c\udfac 3D cutscenes</span><button class="btn secondary" id="tgcut">${st.cutscenes !== false ? "ON" : "OFF"}</button></div>
+      <div class="kv"><span>\u23e9 Match commentary</span><button class="btn secondary" id="tgmode">${st.longCommentary === 1 ? "FULL" : "KEY HIGHLIGHTS"}</button></div>
     </div>
     <div class="panel"><h2>\ud83d\udcbe Backup & Restore</h2>
       <p class="sub">In the app, saves are protected automatically: a backup file in your phone's <b>Documents/FootballLegend</b> folder (survives uninstall \u2014 you'll be offered a restore on reinstall) plus Android's own app backup. The code below is a third option for moving between devices.</p>

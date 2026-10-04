@@ -84,3 +84,27 @@ Hard-won knowledge from development. Check this before repeating an approach.
 - 3-up `.optrow` grids (Mentality, Playing Style, formations): use `flex:1 1 45%` (2+1 wrap), not `30%` — 30% columns clip their descriptions at ≤360w. `.opt { min-width:0 }` is required for wrap to work.
 - Topbar chips: the logo must not wrap; keep chips `white-space:nowrap` + `flex-shrink:0`, and the ≤380px media query shrinks logo/chips. Verified no horizontal overflow at 320w on ML screens.
 - Re-verified: 21/21 fairness, 356/356 ML, 50/50 v1.5, 27/27 ML-CT, 25/25 BaL-CT, 100/100 position-skills.
+
+## v1.6 Wave 2 (match-day UX + knockout honesty)
+
+- **Defensive decisions are a real engine branch, not a UI flavour.** `resolveDef()` rolls
+  `defChoiceOdds()` (win / foul / beaten + a `convMul` on the follow-up chance) and
+  `decisionOdds().def` mirrors it with the *same* inputs (`activeSk`, `dec.stam`, the role from
+  `S.role`). Change one, change both, or `test-wave2.js` fairness (≈2.9k measured duels, ±5pp) fails.
+  `decide("auto")` is only ever the engine's own weighted pick — used by AUTO speed, never for the player.
+- **Knockout rules live in the engine contract:** `createMatch(..., { ko: true })` ends at 90' when the
+  score differs, otherwise at 120' with `st.level = true`; `result()` exposes `et`/`level`/`minute`.
+  The caller runs `Engine.penaltyShootout({ str })` once and passes back `r.penWinner` / `r.penScore`,
+  so the summary, the CT record and the rewards all read the same kick list. Do not re-roll.
+- **Never re-introduce a coin flip for a tie-break.** `game/test-wave2.js` asserts the exact old
+  expressions (e.g. `E.mulberry32(E.hashSeed(M.seed + "ctpens"` and `Math.random() < 0.5) my++`) stay dead.
+- **Half-time hook ordering:** check `match.state.min === 45` at the *top* of `step()`, before the next
+  `match.step()` can push the minute to 46 (a decision at 45' resumes the clock, so the check must be
+  on state, not on the returned minute).
+- **Highlight capture:** `handleEvents()` describes events immediately, pushes non-cutscene shots to
+  `hlQueue` (key mode) or replays them one by one (full mode). AUTO/SKIP (speed 3) intentionally
+  captures nothing — the reel is a playback of what the ticker already showed.
+- **DOM-hook integrity test:** `test-wave2.js` diffs every `$("#id")` in the match-screen regions of
+  `app.js`/`ml.js` against the ids those regions render. Add a hook without markup and it fails.
+- **Recovery:** these edits are committed, so `git checkout HEAD -- game/<file>.js` restores a known
+  good state; the wave-1 patchers (`/home/user/patch_v16_*.py`) must NOT be re-run.

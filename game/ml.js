@@ -1365,7 +1365,7 @@ function mlMatchScreen(fx, displayedProbs) {
   const match = E.createMatch(
     meHome ? Object.assign({}, Hc, { str: myStart }) : Hc,
     meHome ? Ac : Object.assign({}, Ac, { str: myStart }),
-    { seed });
+    { seed, ko: !!(fx.cup || (fx.ct && fx.ctStage === "ko")) }); // #3: knockout night -> extra time + penalties
   // opponent mentality effect applies to their side too (ML_MENT.opp)
   applyStrengths(0);
   let timer = null, speed = 1, over = false;
@@ -1667,12 +1667,43 @@ function mlMatchScreen(fx, displayedProbs) {
       if (over) return; over = true;
       clearInterval(timer);
       const r = match.result();
-      addTick(90, `<b>FULL TIME.</b> ${Hc.short} ${r.gH} - ${r.gA} ${Ac.short}`, "goal");
+      const isKO = !!(fx.cup || (fx.ct && fx.ctStage === "ko"));
+      let sol = null;
+      if (isKO && r.level) { // #3: level after extra time -> honest shootout, no coin flip
+        sol = E.penaltyShootout(Hc, Ac, { seed: E.hashSeed(seed + ":pens") });
+        r.pens = true; r.penWinner = sol.winner; r.penScore = [sol.scoredH, sol.scoredA];
+        addTick(120, "\ud83e\udd85 Level after extra time \u2014 penalties it is.", "goal");
+      }
+      addTick(r.et ? 120 : 90, `<b>${r.et ? "END OF EXTRA TIME" : "FULL TIME"}.</b> ${Hc.short} ${r.gH} - ${r.gA} ${Ac.short}${sol ? ` \u00b7 pens ${sol.scoredH}-${sol.scoredA}` : ""}`, "goal");
       if (window.Snd) Snd.fulltime();
+      function panel() {
+        decEl.style.display = "block";
+        decEl.innerHTML = `<div class="scenline">\ud83c\udfc1 ${r.et ? "AFTER EXTRA TIME" : "FULL TIME"} \u00b7 ${Hc.short} ${r.gH} - ${r.gA} ${Ac.short}${sol ? ` (${sol.scoredH}-${sol.scoredA} pens)` : ""}</div>
+          ${sol ? `<p class="sub" style="margin:4px 0 8px"><b>${sol.winner === 0 ? Hc.short : Ac.short} win the shootout.</b> Every kick was the engine's own conversion roll.</p>` : ""}
+          <button class="btn" id="mlft">CONTINUE \u2794</button>`;
+        $("#mlft").onclick = () => mlFinish(fx, r, displayedProbs);
+      }
+      if (!sol) { panel(); return; }
       decEl.style.display = "block";
-      decEl.innerHTML = `<div class="scenline">\ud83c\udfc1 FULL TIME \u00b7 ${Hc.short} ${r.gH} - ${r.gA} ${Ac.short}</div>
-        <button class="btn" id="mlft">CONTINUE \u2794</button>`;
-      $("#mlft").onclick = () => mlFinish(fx, r, displayedProbs);
+      decEl.innerHTML = `<div class="scenline">\ud83e\udd85 PENALTY SHOOTOUT \u00b7 ${Hc.short} vs ${Ac.short}</div>
+        <div class="sotrow" id="mlsot"></div><div class="sub" id="mlsotline" style="margin-top:6px">The run-ups begin...</div>`;
+      const row = $("#mlsot");
+      let i = 0;
+      (function kick() {
+        if (i >= sol.kicks.length) {
+          $("#mlsotline").innerHTML = `<b>${sol.winner === 0 ? Hc.short : Ac.short} win ${Math.max(sol.scoredH, sol.scoredA)}-${Math.min(sol.scoredH, sol.scoredA)}</b>${sol.suddenDeath ? " after sudden death" : ""}.`;
+          setTimeout(panel, 1000);
+          return;
+        }
+        const k = sol.kicks[i++];
+        const d = document.createElement("span");
+        d.className = "sotdot " + (k.scored ? "ok" : "no");
+        d.textContent = k.scored ? "\u26bd" : "\u2715";
+        d.title = (k.side === 0 ? Hc.short : Ac.short) + " \u00b7 " + k.p + "% conversion";
+        row.appendChild(d);
+        $("#mlsotline").textContent = `${k.side === 0 ? Hc.short : Ac.short} ${k.scored ? "SCORE" : "MISS"} \u00b7 ${k.p}% conversion \u00b7 ${sol.scoredH}-${sol.scoredA}`;
+        setTimeout(kick, 620);
+      })();
     }
     function step() {
       const s = match.step();
@@ -1708,6 +1739,13 @@ function mlMatchScreen(fx, displayedProbs) {
       clearInterval(timer);
       timer = setInterval(step, speed === 0.5 ? 560 : speed === 1 ? 260 : speed === 2 ? 100 : 15);
     }
+    function mlPause() { // #1: manual pause -> the existing tactical window (clock really stops)
+      if (over || match.state.done) return;
+      clearInterval(timer); timer = null;
+      addTick(match.state.min, "\u23f8 Paused \u2014 clock stopped, tactical window open.", "");
+      showWindow("win");
+    }
+    const mlp = $("#mlpaus"); if (mlp) mlp.onclick = () => mlPause();
     document.querySelectorAll("[data-mlspeed]").forEach(b => b.onclick = () => {
       speed = +b.dataset.mlspeed;
       document.querySelectorAll("[data-mlspeed]").forEach(x => x.classList.toggle("on", +x.dataset.mlspeed === speed));
@@ -1731,11 +1769,12 @@ function mlMatchScreen(fx, displayedProbs) {
       <div id="mldec" class="decisionbox" style="display:none"></div>
       <div class="atkstrip" id="mlatk"></div>
       <div class="ticker" id="mlticker" style="height:240px"></div>
-      <div class="speedrow">
+      <div class="speedrow hudbar">
         <button class="btn secondary" data-mlspeed="0.5">\ud83d\udc22 \u00bdx</button>
         <button class="btn secondary on" data-mlspeed="1">\u25b6 1x</button>
         <button class="btn secondary" data-mlspeed="2">\u23e9 2x</button>
         <button class="btn secondary" data-mlspeed="3">\u23ed SKIP</button>
+        <button class="btn secondary" id="mlpaus">\u23f8 PAUSE</button>
       </div>
     </div>
   </div>`;
@@ -1747,7 +1786,22 @@ function mlFinish(fx, r, probs) {
   const oppNm = fx.ct ? fx.oppClub.name : M.world.clubs[meHome ? fx.away : fx.home].name;
   M.scouted = M.scouted || []; if (!M.scouted.includes(oppNm)) M.scouted.push(oppNm);
   const myG = meHome ? r.gH : r.gA, opG = meHome ? r.gA : r.gH;
-  const res = myG > opG ? "W" : myG === opG ? "D" : "L";
+  let res = myG > opG ? "W" : myG === opG ? "D" : "L";
+  let pensTb = false;
+  if ((fx.cup || (fx.ct && fx.ctStage === "ko")) && myG === opG) { // #3: knockout ties are decided by penalties, never a coin flip
+    let iWin;
+    if (r.penWinner != null) {
+      iWin = (r.penWinner === 0) === meHome; // same kick list the player watched
+    } else {
+      const oppC = fx.ct ? fx.oppClub : M.world.clubs[meHome ? fx.away : fx.home];
+      const so = E.penaltyShootout({ str: mlClub().str }, { str: oppC.str },
+        { seed: E.hashSeed(M.seed + ":pens:" + (fx.cup ? "cup" + M.cup.round : "ctko" + M.ct.koRound)) });
+      iWin = so.winner === 0;
+      r.penScore = [so.scoredH, so.scoredA];
+    }
+    res = iWin ? "W" : "L";
+    pensTb = true;
+  }
   if (M.galaxy && !fx.cup && !fx.ct) { // other 5 leagues play their matchday too
     // tier 0: I AM that league's matchday -> skip it. tier 1: my national league carries on without me.
     try { E.galaxySimMD(M.galaxy, M.tier === 0 ? M.leagueIdx : -1, M.matchday, M.seed, M.season); } catch (e) {}
@@ -1782,13 +1836,13 @@ function mlFinish(fx, r, probs) {
       }
     } else { // KO
       const meE = mlCtMyEntry();
-      let win = res === "W" || (res === "D" && E.mulberry32(E.hashSeed(M.seed + "ctpens" + M.ct.koRound))() < 0.55);
+      const win = res === "W"; // #3: the tie-break already happened above (honest shootout)
       const pre = fx.koPre;
       const next = pre.next.map(x => x === null ? (win ? meE : fx.opp) : x);
       if (win) {
         M.lc = (M.lc || 0) + [3, 5, 15][M.ct.koRound];
         prize += [1.5, 2.5, 6][M.ct.koRound];
-        mlNews("\ud83c\udf0d " + E.CT_ROUNDS[M.ct.koRound] + " WON" + (res === "D" ? " on penalties" : "") + "! +" + [3, 5, 15][M.ct.koRound] + " LC");
+        mlNews("\ud83c\udf0d " + E.CT_ROUNDS[M.ct.koRound] + " WON" + (pensTb ? " on penalties (" + (r.penScore ? r.penScore.join("-") : "shootout") + ")" : "") + "! +" + [3, 5, 15][M.ct.koRound] + " LC");
         if (M.ct.koRound >= 2) {
           M.ct.done = true; M.ct.champion = meE;
           mlNews("\ud83c\udf0d\ud83c\udfc6 CHAMPIONS TROPHY WINNERS! " + (M.clubName || mlClub().name) + " rule the continent!");
@@ -1817,12 +1871,13 @@ function mlFinish(fx, r, probs) {
       else p.fit = Math.min(100, p.fit + 30);
       delete p._sub;
     }
-    mlNews("\ud83c\udf0d CT " + (res === "W" ? "WIN" : res === "D" ? "DRAW" : "LOSS") + " " + myG + "-" + opG + " vs " + fx.oppClub.short + ". Net +" + fmtM(prize) + ".");
+    mlNews("\ud83c\udf0d CT " + (res === "W" ? "WIN" : res === "D" ? "DRAW" : "LOSS") + " " + myG + "-" + opG + (pensTb ? " (pens " + (r.penScore ? r.penScore.join("-") : "shootout") + ")" : "") + " vs " + fx.oppClub.short + ". Net +" + fmtM(prize) + ".");
     mlSave();
     render(() => `<div class="screen">${mlTopbar()}
       <div class="panel center">
         <h1>${res === "W" ? "\ud83c\udf0d\ud83c\udf89 VICTORY" : res === "D" ? "\ud83e\udd1d DRAW" : "\ud83d\ude24 DEFEAT"}</h1>
         <h2>${meHome ? mlClub().short : fx.oppClub.short} ${r.gH} - ${r.gA} ${meHome ? fx.oppClub.short : mlClub().short}</h2>
+        ${pensTb ? `<p class="sub"><b>Decided on penalties ${r.penScore ? r.penScore.join("-") : ""}</b> \u2014 every kick was the engine's own conversion roll.</p>` : ""}
         <p class="sub">\ud83c\udf0d Champions Trophy \u00b7 ${fx.ctStage === "group" ? "Group stage" : "Knockout"}</p>
         <div class="kv"><span>Continental gate profit</span><b style="color:var(--green)">+${fmtM(prize)}</b></div>
         <div class="kv"><span>Budget</span><b style="color:var(--gold)">${fmtM(M.budget)}</b></div>
@@ -1833,9 +1888,9 @@ function mlFinish(fx, r, probs) {
     return;
   }
   if (fx.cup) {
-    if (res === "W" || (res === "D" && E.mulberry32(E.hashSeed(M.seed + "pens" + M.matchday))() < 0.5)) {
+    if (res === "W") { // #3: decided above by the honest shootout when level
       prize += ML_CUP_PRIZE[M.cup.round];
-      mlNews("\ud83c\udfc6 " + ML_CUP_ROUNDS[M.cup.round] + " WON! " + (M.cup.round === 3 ? "CUP CHAMPIONS!" : "Through to the " + ML_CUP_ROUNDS[M.cup.round + 1] + "."));
+      mlNews("\ud83c\udfc6 " + ML_CUP_ROUNDS[M.cup.round] + " WON" + (pensTb ? " ON PENALTIES" : "") + "! " + (M.cup.round === 3 ? "CUP CHAMPIONS!" : "Through to the " + ML_CUP_ROUNDS[M.cup.round + 1] + "."));
       M.cup.round++;
       if (M.cup.round >= 4) M.cup.done = true;
     } else {
@@ -1880,6 +1935,7 @@ function mlFinish(fx, r, probs) {
     <div class="panel center">
       <h1>${res === "W" ? "\ud83c\udf89 VICTORY" : res === "D" ? "\ud83e\udd1d DRAW" : "\ud83d\ude24 DEFEAT"}</h1>
       <h2>${M.world.clubs[fx.home].short} ${r.gH} - ${r.gA} ${M.world.clubs[fx.away].short}</h2>
+      ${pensTb ? `<p class="sub"><b>${fx.cup ? "Cup tie" : "Match"} decided on penalties ${r.penScore ? r.penScore.join("-") : ""}</b> \u2014 honest shootout, no coin flip.</p>` : ""}
       <div class="kv"><span>Matchday profit</span><b style="color:var(--green)">+${fmtM(prize)}</b></div>
       ${evGp ? `<div class="kv"><span>\ud83c\udfaf Events</span><b style="color:var(--green)">+${fmtM(evGp)}</b></div>` : ""}
       ${drops.length ? `<div class="kv"><span>\ud83c\udf81 Trainers</span><b style="color:var(--gold)">${drops.join(" + ")}</b></div>` : ""}

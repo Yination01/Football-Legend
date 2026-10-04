@@ -91,7 +91,8 @@ runStep('Every JS source file compiles cleanly', () => {
     'game/vendor-supabase.js',
     'game/admin/admin.js',
     'app/copy-game.js',
-    'game/test-v16.js'
+    'game/test-v16.js',
+    'game/test-wave2.js'
   ];
   for (const rel of files) {
     const abs = path.join(ROOT, rel);
@@ -150,6 +151,13 @@ runStep('v1.6: Form Arrows, Counters, S2 Rollover, Safe Reload (test-v16.js)', (
   const out = execSync('node test-v16.js', { cwd: path.join(ROOT, 'game'), encoding: 'utf8' });
   const m = out.match(/(\d+)\s+passed,\s+(\d+)\s+failed/);
   if (!m || parseInt(m[2], 10) > 0) throw new Error(`v16 tests failed: ${out}`);
+  return parseInt(m[1], 10);
+});
+
+runStep('v1.6 Wave 2: Pause/Drawer, Half-Time, Extra Time + Shootouts, Highlights, Defensive Matrix (test-wave2.js)', () => {
+  const out = execSync('node test-wave2.js', { cwd: path.join(ROOT, 'game'), encoding: 'utf8' });
+  const m = out.match(/(\d+)\s+passed,\s+(\d+)\s+failed/);
+  if (!m || parseInt(m[2], 10) > 0) throw new Error(`wave-2 tests failed: ${out}`);
   return parseInt(m[1], 10);
 });
 
