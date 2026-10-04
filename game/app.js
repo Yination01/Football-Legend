@@ -4109,7 +4109,7 @@ function newsInboxScreen() {
           <span style="font-size:1.05rem">⟳</span>
           <span class="sub" style="font-size:.72rem">Refresh</span>
         </button>
-        <span class="badge gold" style="font-size:.72rem">v1.5 (Preview 15)</span>
+        <span class="badge gold" style="font-size:.72rem">v1.6 (Preview 17)</span>
       </div>
     </div>
     ${inboxGifts.length ? `
@@ -4127,12 +4127,16 @@ function newsInboxScreen() {
         </div>`).join("")}
     </div>` : ""}
     <div class="panel" style="border:1px solid var(--gold);background:rgba(255,215,94,.05)">
-      <div class="kv"><span style="color:var(--gold);font-weight:800;font-size:.9rem">⚡ WHAT'S NEW IN LATEST PATCH</span><span class="sub">Preview 15</span></div>
+      <div class="kv"><span style="color:var(--gold);font-weight:800;font-size:.9rem">⚡ WHAT'S NEW IN LATEST PATCH</span><span class="sub">Preview 17 · v1.6</span></div>
       <ul style="margin:8px 0 0;padding-left:18px;line-height:1.5;font-size:.82rem;color:var(--sub)">
-        <li><b style="color:var(--text)">🔒 Session Expiration Auto-Reset:</b> Detects expired Google sessions, automatically clears stale tokens, and provides clear account guidance so you can sign in fresh and restore your career.</li>
-        <li><b style="color:var(--text)">🌐 Cloud Sync CORS & Connection Fix:</b> Resolved edge function preflight header mismatch that caused mobile WebViews to fail CORS requests.</li>
-        <li><b style="color:var(--text)">🔍 Crystal-Clear Cloud Diagnostics:</b> Settings > Account displays live cloud save info, and Restore/Sync displays full descriptive details and error tracking.</li>
-        <li><b style="color:var(--text)">🔑 Permanent In-Place APK Updates:</b> Fixed keystore signing configuration so all updates install directly over existing versions without uninstallation.</li>
+        <li><b style="color:var(--text)">⏸️ Pause, Tactics Drawer & Half-Time:</b> Pause mid-match to change roles, take a real half-time team talk, and see extra time plus interactive penalty shootouts in cup ties.</li>
+        <li><b style="color:var(--text)">🎬 Key Highlights:</b> Skip replays live, then watch a post-match highlight reel of the chances that mattered.</li>
+        <li><b style="color:var(--text)">🛡️ Defender & Midfield Decisions:</b> Tackle, jockey, step up or drop off — with the exact odds shown before every duel, verified by tests.</li>
+        <li><b style="color:var(--text)">📈 Training Engine, AUTO vs MAX:</b> Published XP formula, real week costs and ETAs per skill; AUTO spreads growth, MAX pushes your archetype.</li>
+        <li><b style="color:var(--text)">🏅 MOTM + Awards Gala:</b> Man of the Match from the real match log, plus end-of-season MVP, club Golden Boot, Best XI and Manager of the Season.</li>
+        <li><b style="color:var(--text)">💰 Economy Ledger, Club Hub & Dossier:</b> One auditable GP/LC ledger, matchday caps, four upgradable club trees, and a scouting dossier on any club.</li>
+        <li><b style="color:var(--text)">🎮 AI Divisions:</b> A D10 → D1 side ladder — 10 matches a phase, 7 wins to climb, checkpoint rewards, true odds every match.</li>
+        <li><b style="color:var(--text)">☁️ Cloud Auto-Sync + Security:</b> Every finished match backs itself up (offline-queued, retried), and the cloud now enforces select-only access for players. Install straight over your old build — your saves stay.</li>
       </ul>
     </div>
     <div class="panel"><h2>📢 Server Announcements</h2>

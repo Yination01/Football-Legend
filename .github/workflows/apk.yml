@@ -81,7 +81,7 @@ jobs:
             const bgPath = 'app/android/app/build.gradle';
             let bg = fs.readFileSync(bgPath, 'utf8');
             bg = bg.replace(/versionCode \d+/, 'versionCode ' + process.env.BUILD_N);
-            bg = bg.replace(/versionName \"[^\"]+\"/, 'versionName \"1.5.' + process.env.BUILD_N + '\"');
+            bg = bg.replace(/versionName \"[^\"]+\"/, 'versionName \"1.6.' + process.env.BUILD_N + '\"');
             fs.writeFileSync(bgPath, bg);
             console.log('Stamped versionCode ' + process.env.BUILD_N + ' into ' + bgPath);
           "
@@ -114,12 +114,15 @@ jobs:
       - name: Sync Game into Capacitor Android project
         run: npm run sync
 
-      # Ensure fixed debug keystore is used so builds install over previous ones
+      # In-place updates: every preview is signed with the SAME keystore committed in the repo,
+      # under the SAME applicationId (com.footballlegend.game), with a higher versionCode.
+      # That is exactly what Android requires to install over an existing copy and keep its data.
       - name: Setup stable debug signing key
         run: |
           mkdir -p ~/.android
           cp app/android/app/debug.keystore ~/.android/debug.keystore
           echo "Stable debug keystore installed in ~/.android/debug.keystore"
+          keytool -list -v -keystore app/android/app/debug.keystore -storepass android -alias androiddebugkey | grep -E "Alias|SHA256"
 
       - name: Build APK locally on the runner
         run: |
@@ -138,10 +141,20 @@ jobs:
           echo "Verification passed: packaged app.js is byte-identical to game/app.js"
           rm -rf .verify-tmp
 
-      # Verify APK is signed with the stable debug key
-      - name: Verify APK signature fingerprint
+      # Verify the APK is signed with the key every previous preview used, so this build
+      # installs over the copy already on the phone (and any future one installs over this).
+      - name: Verify APK signature fingerprint (installs over previous builds)
         run: |
           keytool -printcert -jarfile football-legend.apk | grep -E "Owner|SHA256"
+          APK_FP=$(keytool -printcert -jarfile football-legend.apk | grep -m1 SHA256 | sed 's/.*SHA256: //')
+          KEY_FP=$(keytool -list -v -keystore app/android/app/debug.keystore -storepass android -alias androiddebugkey | grep -m1 SHA256 | sed 's/.*SHA256: //')
+          echo "APK cert : $APK_FP"
+          echo "Repo key : $KEY_FP"
+          if [ "$APK_FP" != "$KEY_FP" ]; then
+            echo "::error::APK is not signed with the repo's stable keystore - it would NOT install over the previous build."
+            exit 1
+          fi
+          echo "Signature matches the repo keystore: this APK installs over the previous preview.""
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v7
