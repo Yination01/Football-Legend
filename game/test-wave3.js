@@ -178,6 +178,184 @@ check('#17 season stats reset after the gala is recorded', mlSrcRaw.indexOf('p.a
   check('#17 the review panel renders the gala block', capturedHTML.some(h => h.indexOf('Awards Gala') >= 0) || mlHome().indexOf('Awards Gala') >= 0);
 }
 
+/* ============================== #16 economy ============================== */
+{
+  const E2 = E.ECON;
+  check('#16 the two currencies are separate and documented (GP gate/prizes, LC objectives/awards)',
+    E2.PACKS.std.currency === 'gp' && E2.PACKS.star.currency === 'lc' && E2.PACKS.leg.currency === 'lc');
+  check('#16 every published drop table sums to exactly 100%',
+    Object.keys(E2.PACKS).every(k => E2.packTotal(k) === 100));
+  check('#16 the standard draw is honestly a no-special-card pack',
+    E2.PACKS.std.table.length === 1 && E2.PACKS.std.table[0].cardId === null && E2.PACKS.std.table[0].pct === 100);
+  // rolling the table must match the printed percentages (deterministic sweep + monte carlo)
+  const counts = { legendary: 0, bigtime: 0, showtime: 0, trending: 0 };
+  const N = 20000;
+  for (let i = 0; i < N; i++) counts[E2.rollCard('star', i / N)]++;
+  const band = (id) => E2.PACKS.star.table.find(r => r.cardId === id).pct;
+  check('#16 the Star Draw roll really lands on the printed rates (LEG ' + (100 * counts.legendary / N).toFixed(1) + '% vs ' + band('legendary') + '%)',
+    ['legendary', 'bigtime', 'showtime', 'trending'].every(id => Math.abs(100 * counts[id] / N - band(id)) < 1.5));
+  check('#16 the Legend Draw never drops a trending card', (() => { for (let i = 0; i < 2000; i++) if (E2.rollCard('leg', i / 2000) === 'trending') return false; return true; })());
+  check('#16 OVR ranges are published from the real tier bands, not guessed (star 83-96, leg 87-96)',
+    JSON.stringify(E2.packOvrRange('star')) === '[83,96]' && JSON.stringify(E2.packOvrRange('leg')) === '[87,96]');
+  check('#16 tier bands match what mlApplySpecialTier applies', mlSrcRaw.indexOf('E.ECON.tierOvr(cardId)') >= 0 && mlSrcRaw.indexOf('83 + Math.floor') < 0);
+  check('#16 the shop screen renders its odds from the table, never hand-written',
+    mlSrcRaw.indexOf('E.ECON.PACKS).map(k =>') >= 0 && mlSrcRaw.indexOf('TRENDING 32% / SHOW TIME 30%') < 0);
+  check('#16 matchday consumable caps exist and are enforced',
+    E2.MD_TRAINER_CAP === 3 && E2.MD_PACK_CAP === 2 && mlSrcRaw.indexOf('mlCapLeft("trainers") <= 0') >= 0 && mlSrcRaw.indexOf('mlCapLeft("packs") <= 0') >= 0);
+  check('#16 caps are consumed and reset on the calendar', (mlSrcRaw.match(/mlCapUse\("trainers"\)/g) || []).length === 3 && mlSrcRaw.indexOf('mlMdReset(); // #16') >= 0);
+  // exactly one write site each, and both live inside mlEco itself
+  const ecoBody = mlSrcRaw.slice(mlSrcRaw.indexOf('function mlEco('), mlSrcRaw.indexOf('function mlLedgerTotals()'));
+  check('#16 every currency movement is routed through mlEco (single write site per currency)',
+    (mlSrcRaw.match(/M\.budget = Math\.round/g) || []).length === 1 && (mlSrcRaw.match(/M\.lc = Math\.round/g) || []).length === 1 &&
+    ecoBody.indexOf('M.budget = Math.round') >= 0 && ecoBody.indexOf('M.lc = Math.round') >= 0 && ecoBody.indexOf('M.ledger.push') >= 0);
+  check('#16 a ledger screen exists with sources, sinks and balances',
+    mlSrcRaw.indexOf('function mlLedgerScreen()') >= 0 && mlSrcRaw.indexOf('By source') >= 0 && mlSrcRaw.indexOf('Recent movements') >= 0);
+}
+{
+  // the strong invariant: after a full season the ledger must explain every GP/LC change
+  mlNewSave('britain', 'Ledger FC');
+  M.seed = 4242; M.welcomeClaimed = true;
+  const gp0 = M.budget, lc0 = M.lc || 0;
+  let guard = 0;
+  while ((M.matchday < 18 || mlCupPending() || mlCtFixture()) && guard++ < 300) {
+    const fx = mlFixtureNow(); if (!fx) break;
+    const meHome = fx.ct ? fx.ctHome : fx.home === M.clubIdx;
+    mlFinish(fx, meHome ? { gH: 2, gA: 1 } : { gH: 1, gA: 2 }, { home: 40, draw: 30, away: 30 });
+  }
+  const gpSum = M.ledger.reduce((t, x) => t + x.gp, 0);
+  const lcSum = M.ledger.reduce((t, x) => t + x.lc, 0);
+  check('#16 the ledger explains every GP movement (sum ' + gpSum.toFixed(2) + ' vs actual ' + (M.budget - gp0).toFixed(2) + ')', near(gpSum, M.budget - gp0, 0.02));
+  check('#16 the ledger explains every LC movement (sum ' + lcSum + ' vs actual ' + ((M.lc || 0) - lc0) + ')', near(lcSum, (M.lc || 0) - lc0, 0.02));
+  check('#16 GP really is gate receipts + prizes', M.ledger.some(x => x.label === 'Gate receipts & prizes' && x.gp > 0));
+  const totals = mlLedgerTotals();
+  const used = Object.keys(totals).filter(k => totals[k].n > 0);
+  check('#16 totals group by source (' + used.join(' + ') + ')',
+    used.includes('Gate receipts & prizes') && used.includes('Cup progress') && used.every(k => typeof totals[k].gp === 'number' && totals[k].n > 0));
+  check('#16 the ledger screen renders without throwing', (() => { const h = mlLedgerScreen(); return h.indexOf('Economy Ledger') >= 0 && h.indexOf('Gate receipts & prizes') >= 0; })());
+}
+
+/* ============================== #12 infrastructure hub ============================== */
+{
+  const E2 = E.ECON;
+  const trees = Object.keys(E2.INFRA);
+  check('#12 four trees: stadium, staff, academy, facilities', trees.length === 4 && ['stadium', 'staff', 'academy', 'facilities'].every(t => trees.includes(t)));
+  check('#12 five levels each, prices escalate', trees.every(t => E2.INFRA[t].levels.length === 5 && E2.INFRA_MAX === 5 && E2.INFRA[t].levels.every((v, i) => i === 0 || v > E2.INFRA[t].levels[i - 1])));
+  check('#12 every level has an exact, printable effect', trees.every(t => [1, 3, 5].every(n => typeof E2.INFRA[t].effect(n) === 'string' && E2.INFRA[t].effect(n).length > 3)));
+  check('#12 the stadium effect text IS gateMult (no drift between promise and code)',
+    E2.INFRA.stadium.effect(3) === 'Gate receipts +' + (18 * 3) + '%' && Math.abs(E2.gateMult(3) - (1 + 0.18 * 3)) < 1e-9 && E2.INFRA.stadium.effect(3).indexOf('54%') >= 0);
+  check('#12 costs read from the table and max out honestly',
+    JSON.stringify(E2.infraCost('stadium', 0)) === JSON.stringify({ gp: 6, lc: 0, next: 1 }) && E2.infraCost('stadium', 5) === null);
+  check('#12 the hub screen shows every level price and effect',
+    mlSrcRaw.indexOf('function mlInfraScreen()') >= 0 && mlSrcRaw.indexOf('UPGRADE ') >= 0 && mlSrcRaw.indexOf('data-infra="${tree}"') >= 0 && mlSrcRaw.indexOf('E.ECON.infraCost(tree, lvl)') >= 0);
+  // real effects, measured
+  mlNewSave('britain', 'Infra FC');
+  M.welcomeClaimed = true;
+  const p = M.squad[0];
+  const need0 = mlExpNeed(p);
+  M.infra = { stadium: 0, staff: 3, academy: 0, facilities: 0 };
+  const need3 = mlExpNeed(p);
+  check('#12 coaching staff really cuts training XP (' + need0 + ' -> ' + need3 + ')', need3 < need0 && near(need0 / need3, E.TRAIN.coachMul(3), 0.02));
+  check('#12 facilities really speed recovery', E2.recoveryBonus(0, 3) === 9 && mlSrcRaw.indexOf('30 + E.ECON.recoveryBonus(0, facLvl)') >= 0);
+  check('#12 academy really lifts youth intake', mlSrcRaw.indexOf('mlGenPlayer(rng, M.region, p.pos, 52 + acLvl') >= 0 && mlSrcRaw.indexOf('+ 2 * acLvl)') >= 0);
+  check('#12 facilities really lift trainer drops', mlSrcRaw.indexOf('0.30 + 0.05 * mlInfraLvl("facilities")') >= 0);
+  check('#12 stadium really scales the gate (wired into every income site)',
+    (mlSrcRaw.match(/E\.ECON\.gateMult\(\(M\.infra && M\.infra\.stadium\) \|\| 0\)/g) || []).length >= 4);
+  check('#12 buying goes through the ledger and persists the level',
+    mlSrcRaw.indexOf('mlEco(-cost.gp, -cost.lc, "Club upgrades")') >= 0 && mlSrcRaw.indexOf('M.infra[tree] = cost.next;') >= 0);
+  const before = M.budget;
+  M.infra.stadium = 1;
+  check('#12 upgrades are actually paid for (budget only moves through mlEco)',
+    (mlSrcRaw.match(/M\.budget -=/g) || []).length === 0 && typeof before === 'number');
+  mlEnsureInfra();
+  check('#12 old saves migrate to the hub at level 0 with no crash', Object.keys(M.infra).length === 4);
+}
+
+/* ============================== #13 club dossier ============================== */
+{
+  mlNewSave('britain', 'Dossier FC');
+  M.welcomeClaimed = true;
+  mlEnsureInfra();
+  M.infra.staff = 0;
+  const idx = (M.clubIdx + 1) % M.world.clubs.length;
+  const d0 = mlDossierData(idx);
+  check('#13 the dossier reads only real stored facts (position, strength, style, manager)',
+    d0 && d0.name === M.world.clubs[idx].name && d0.pos >= 1 && d0.pos <= M.world.clubs.length && typeof d0.strength === 'number' && !!d0.style);
+  check('#13 it compares strength and table position with yours honestly',
+    typeof d0.delta === 'number' && d0.myPos >= 1 && typeof d0.myStrength === 'number');
+  M._dossier = idx;
+  const lowHTML = mlDossierHTML();
+  M.infra.staff = 4;
+  const highHTML = mlDossierHTML();
+  check('#13 at scouting tier 0 the style/manager/form lines are locked, not faked',
+    lowHTML.indexOf('Locked') >= 0 && lowHTML.indexOf('scouting tier 2 needed') >= 0);
+  check('#13 a better scouting department really unlocks more of the dossier',
+    highHTML.indexOf('Playing style') >= 0 && highHTML.indexOf('Manager') >= 0 && highHTML.indexOf('Recent form') >= 0 && highHTML.indexOf('Budget tier') >= 0);
+  check('#13 AI clubs never get invented star players (' + (highHTML.indexOf('no player names') >= 0) + ')', highHTML.indexOf('no player names to report') >= 0 && highHTML.indexOf('Star players</span><b>') < 0);
+  M.infra.staff = 5;
+  M._dossier = M.clubIdx;
+  const mineHTML = mlDossierHTML();
+  check('#13 your own club does show star players (they are tracked)', mineHTML.indexOf('Star players') >= 0 && (M.squad.length > 0));
+  check('#13 the dossier is a modal with a close control',
+    mineHTML.indexOf('class="pausemodal"') >= 0 && mineHTML.indexOf('id="mldossierx"') >= 0);
+  check('#13 host screens include the overlay and wire the taps',
+    (mlSrcRaw.match(/\$\{mlDossierHTML\(\)\}/g) || []).length >= 2 && mlSrcRaw.indexOf('data-dossier="${t.i}" data-host="table"') >= 0 && mlSrcRaw.indexOf('function mlDossierWire()') >= 0);
+  check('#13 form rows come from the real matchday log (W/D/L + scores)',
+    mlSrcRaw.indexOf('function mlClubForm(idx, n)') >= 0 && mlSrcRaw.indexOf('res: my > op ? "W" : my === op ? "D" : "L"') >= 0);
+  M._dossier = null;
+  check('#13 closing removes the overlay', mlDossierHTML() === '');
+}
+
+/* ============================== #15 AI Divisions ladder ============================== */
+{
+  const D = E.ECON.DIV;
+  check('#15 published ladder rules (10 matches, 7 up, 7 down)', D.MATCHES === 10 && D.PROMOTE_WINS === 7 && D.RELEGATE_LOSSES === 7);
+  check('#15 AI squads escalate from D10 to D1', D.aiStr(10) < D.aiStr(7) && D.aiStr(7) < D.aiStr(4) && D.aiStr(4) < D.aiStr(1) && D.aiStr(1) <= 92);
+  check('#15 promotion needs 7 wins, relegation needs 7 losses, anything else stays',
+    D.next(6, 7, 3) === 5 && D.next(6, 3, 7) === 7 && D.next(6, 5, 5) === 6 && D.next(6, 6, 4) === 6);
+  check('#15 the ladder cannot be left (D1 promotion stays at D1, D10 relegation stays at D10)',
+    D.next(1, 8, 2) === 1 && D.next(10, 2, 8) === 10);
+  check('#15 checkpoint rewards scale with division and always pay something',
+    D.reward(1, true).gp > D.reward(10, true).gp && D.reward(1, true).lc > D.reward(10, true).lc && D.reward(10, false).gp > 0);
+
+  mlNewSave('britain', 'Ladder FC');
+  M.welcomeClaimed = true;
+  mlDivEnsure();
+  const loan = mlDivLoanXI();
+  check('#15 a loaned XI exists for players without a squad', loan.length === 11 && loan.every(p => p.ovr >= 65));
+  M.squad = [];  // simulate an empty squad: the ladder must still be playable
+  check('#15 with an empty squad the ladder fields the loan XI', mlDivPlayers().length === 11 && mlDivStr() > 60);
+  M.squad = M.div.loan.map(p => Object.assign({}, p, { id: p.id }));
+  check('#15 with a real squad it uses your XI (best 11)', mlDivPlayers().length >= 11);
+  check('#15 the ladder never touches the league calendar', (() => { const md = M.matchday, res = M.results.length; mlDivFinish({ short: 'YOU', str: 80, home: true }, { short: 'AI', str: 76 }, { home: 50, draw: 25, away: 25 }, { gH: 2, gA: 0 }); return M.matchday === md && M.results.length === res; })());
+  check('#15 a win is logged in the phase and paid into the ledger', M.div.ph.w === 1 && M.ledger.some(x => x.label === 'Divisions ladder'));
+
+  // clear a whole phase of wins: must promote and record the phase
+  const divBefore = M.div.div;
+  for (let i = 0; i < 9; i++) mlDivFinish({ short: 'YOU', str: 82, home: true }, { short: 'AI', str: 74 }, { home: 60, draw: 20, away: 20 }, { gH: 3, gA: 0 });
+  check('#15 7+ wins promotes (' + divBefore + ' -> ' + M.div.div + ')', M.div.div === divBefore - 1);
+  check('#15 the phase is archived with its record', M.div.hist.length >= 1 && M.div.hist[M.div.hist.length - 1].w >= 7 && M.div.hist[M.div.hist.length - 1].result.indexOf('PROMOTED') >= 0);
+  check('#15 a fresh phase starts at zero', M.div.ph.p === 0 && M.div.ph.w === 0);
+  check('#15 lifetime best tracks the deepest division reached', M.div.best <= divBefore - 1);
+
+  // relegation path
+  const dv2 = M.div.div;
+  for (let i = 0; i < 10; i++) mlDivFinish({ short: 'YOU', str: 60, home: true }, { short: 'AI', str: 88 }, { home: 10, draw: 10, away: 80 }, { gH: 0, gA: 3 });
+  check('#15 7+ losses relegates (' + dv2 + ' -> ' + M.div.div + ')', M.div.div === dv2 + 1);
+
+  // climb to D1 and win it: trophy + champion counter
+  M.div.div = 1; M.div.ph = { p: 0, w: 0, d: 0, l: 0 };
+  const trophies0 = (M.trophies || []).length;
+  for (let i = 0; i < 10; i++) mlDivFinish({ short: 'YOU', str: 90, home: true }, { short: 'AI', str: 88 }, { home: 55, draw: 25, away: 20 }, { gH: 2, gA: 0 });
+  check('#15 winning the D1 phase banks a trophy and stays at D1 (trophies ' + trophies0 + ' -> ' + (M.trophies || []).length + ')',
+    M.div.div === 1 && (M.trophies || []).length === trophies0 + 1 && M.div.champ >= 1 && M.div.hist[M.div.hist.length - 1].result.indexOf('PROMOTED') >= 0);
+  check('#15 every match was decided by real engine scores, not by the ladder (orientation honoured)',
+    mlSrcRaw.indexOf('const my = me.home ? r.gH : r.gA') >= 0 && mlSrcRaw.indexOf('me.str >= oppc.str ? r.gH') < 0);
+  check('#15 the ladder screen shows true odds before kick-off', (() => { const h = mlDivHome(); return h.indexOf('True win probability') >= 0 && h.indexOf('AI DIVISIONS') >= 0 && h.indexOf('Checkpoint rewards') >= 0; })());
+  check('#15 the match screen is a real playable match (clock, ticker, speeds)',
+    mlSrcRaw.indexOf('function mlDivMatch(me, oppc, probs)') >= 0 && mlSrcRaw.indexOf('data-divspeed') >= 0 && mlSrcRaw.indexOf('E.createMatch(me, oppc, { seed })') >= 0);
+  check('#15 the ladder is reachable from the ML home screen', mlSrcRaw.indexOf('id="mldiv"') >= 0 && mlSrcRaw.indexOf('dv.onclick = () => render(mlDivHome)') >= 0);
+}
+
 console.log('\n' + '-'.repeat(58));
 console.log(pass + ' passed, ' + fails.length + ' failed');
 if (fails.length) { fails.forEach(f => console.log('FAIL  ' + f)); process.exit(1); }

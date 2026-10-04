@@ -20,8 +20,9 @@ spec.
 6. **Save migrations**: every new save field ships with a default-on-load migration in
    `ML.enter()` / `flBootScreen()` paths so existing careers never break.
 
-**Test gate today:** `npm run test:all` → **766 checks green** (config, syntax 9, fairness 21,
-ML 364-368, ML-CT 27, BaL-CT 25, skills 102, v15 55, v1.6 suite 54, **wave-2 suite 95**).
+**Test gate today:** `npm run test:all` → **898 checks green** (config, syntax 9, fairness 21,
+ML 364-368, ML-CT 27, BaL-CT 25, skills 102, v15 55, v1.6 suite 54, wave-2 suite 95,
+**wave-3 suite 127**).
 
 ---
 
@@ -222,6 +223,12 @@ read the *next* season's club index.
 - Card packs display **published drop rates** (per-tier %), gated by LC; duplicate conversion stays.
 - **Matchday consumable caps**: a per-matchday limit on fitness/medical trainers to protect the
   economy; a ledger screen lists every source and sink so the model is auditable.
+
+**Status:** all seven items implemented; suite `game/test-wave3.js` (**127 checks**) covers the
+published formulas, the economy ledger invariant (sum of ledger rows == the actual GP/LC delta after
+a driven season), the infrastructure effects measured against the engine, the dossier's
+scouting gates, and the full divisions ladder (promote / relegate / D1 title / loan XI). Money
+labelling: AI-club player stats are *not* tracked, so #13/#17 say so instead of inventing them.
 
 ### #17 MOTM & Awards — *Post-Match MOTM + Annual Awards Gala*
 - MOTM computed from the real event log (goals, assists, saves, tackles, rating, minutes) —

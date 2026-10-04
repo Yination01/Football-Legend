@@ -194,6 +194,95 @@ function stylesFor(pos) {
 
 // ---------- Match roles (per-match game plan) ----------
 /* ============================================================
+   v1.6 #16: ECONOMY (single source of truth)
+   ------------------------------------------------------------
+   GP = gate receipts + prizes. LC = objectives, awards, milestones, rank rewards.
+   Card packs publish their EXACT drop table here - the roll and the UI read the same object,
+   so a displayed rate can never drift from the rate that runs.
+   ============================================================ */
+const ECON = {
+  MD_TRAINER_CAP: 3,   // trainer cards you may apply per matchday (fitness/medical economy guard)
+  MD_PACK_CAP: 2,      // draws per matchday, same idea
+  PACKS: {
+    std: {
+      label: "Standard Draw", currency: "gp", price: 3, ovr: [66, 76],
+      table: [{ cardId: null, pct: 100 }],
+      note: "OVR 66-76 - STANDARD card - no skills"
+    },
+    star: {
+      label: "Star Draw", currency: "lc", price: 30, ovr: [78, 83],
+      table: [{ cardId: "legendary", pct: 8 }, { cardId: "bigtime", pct: 30 }, { cardId: "showtime", pct: 30 }, { cardId: "trending", pct: 32 }],
+      note: "OVR 78-83 - TRENDING 32% / SHOW TIME 30% / BIG TIME 30% / LEGENDARY 8%"
+    },
+    leg: {
+      label: "Legend Draw", currency: "lc", price: 60, ovr: [86, 91],
+      table: [{ cardId: "legendary", pct: 30 }, { cardId: "bigtime", pct: 40 }, { cardId: "showtime", pct: 30 }],
+      note: "OVR 86-91 - SHOW TIME 30% / BIG TIME 40% / LEGENDARY 30%"
+    }
+  },
+  rollCard(kind, r0) { // cumulative from the top of the published table
+    const p = ECON.PACKS[kind]; if (!p) return null;
+    let acc = 0;
+    for (const row of p.table) { acc += row.pct; if (r0 * 100 < acc) return row.cardId; }
+    return p.table[p.table.length - 1].cardId;
+  },
+  packTotal(kind) { const p = ECON.PACKS[kind]; return p ? p.table.reduce((t, r) => t + r.pct, 0) : 0; },
+  // special-card OVR bands: the SAME numbers mlApplySpecialTier applies, so displayed ranges are real
+  TIER_OVR: { trending: [83, 87], showtime: [87, 91], bigtime: [89, 93], legendary: [92, 96] },
+  tierOvr(cardId) { return ECON.TIER_OVR[cardId] || null; },
+  packOvrRange(kind) { // honest final range across the published table
+    const p = ECON.PACKS[kind]; if (!p) return null;
+    let lo = Infinity, hi = -Infinity;
+    for (const row of p.table) {
+      const band = row.cardId ? ECON.TIER_OVR[row.cardId] : null;
+      const r = band || p.ovr;
+      if (r[0] < lo) lo = r[0];
+      if (r[1] > hi) hi = r[1];
+    }
+    return [lo, hi];
+  },
+  gateMult(stadiumLvl) { return 1 + 0.18 * Math.max(0, stadiumLvl || 0); },        // #12 Stadium
+  // #12 Club Infrastructure Hub: prices and the EXACT effect of every level, in one place.
+  INFRA_MAX: 5,
+  INFRA: {
+    stadium: { label: "Stadium", ico: "\ud83c\udfdf\ufe0f", desc: "Capacity -> gate receipts",
+      levels: [6, 10, 15, 21, 28], lc: [0, 0, 0, 0, 0],
+      effect: (n) => "Gate receipts +" + (18 * n) + "%" },
+    staff: { label: "Staff", ico: "\ud83d\udc65", desc: "Coaching, medical, fitness, scouting",
+      levels: [4, 7, 11, 16, 22], lc: [3, 4, 6, 8, 10],
+      effect: (n) => "Training XP +" + (12 * n) + "% \u00b7 medical/fitness lvl " + Math.min(3, n) + " \u00b7 scouting tier " + n },
+    academy: { label: "Academy", ico: "\ud83c\udf93", desc: "Youth intake quality and potential",
+      levels: [5, 8, 12, 17, 24], lc: [4, 5, 7, 9, 12],
+      effect: (n) => "Youth intake OVR +" + n + ", potential +" + (2 * n) },
+    facilities: { label: "Facilities", ico: "\ud83c\udfe5", desc: "Recovery rate and trainer luck",
+      levels: [5, 8, 12, 16, 22], lc: [2, 3, 5, 7, 9],
+      effect: (n) => "Recovery +" + (3 * n) + "/rest \u00b7 trainer drop +" + (5 * n) + "%" }
+  },
+  // #15 eFootball AI Divisions: published ladder rules (10 matches, 7 wins up / 7 losses down)
+  DIV: {
+    MATCHES: 10, PROMOTE_WINS: 7, RELEGATE_LOSSES: 7, TOP: 1, BOTTOM: 10,
+    LOAN_STR: 71,
+    aiStr(div) { const d = Math.max(1, Math.min(10, div | 0 || 10)); return Math.round((72 + (10 - d) * 1.8) * 10) / 10; },
+    reward(div, promoted) { // checkpoint pay-out: deeper divisions pay more
+      const d = Math.max(1, Math.min(10, div | 0 || 10));
+      const step = 10 - d;
+      return promoted ? { gp: Math.round((1 + step * 0.4) * 10) / 10, lc: 2 + step } : { gp: 0.3, lc: 0 };
+    },
+    next(div, w, l) { // what a completed phase does: promote / relegate / stay
+      if (w >= 7) return Math.max(1, div - 1);
+      if (l >= 7) return Math.min(10, div + 1);
+      return div;
+    }
+  },
+  infraCost(tree, currentLevel) { // price of the NEXT level, or null when maxed
+    const t = ECON.INFRA[tree]; if (!t) return null;
+    if (currentLevel >= ECON.INFRA_MAX) return null;
+    return { gp: t.levels[currentLevel], lc: t.lc[currentLevel], next: currentLevel + 1 };
+  },
+  recoveryBonus(medLvl, facLvl) { return 5 * Math.max(0, medLvl || 0) + 3 * Math.max(0, facLvl || 0); } // #12 Staff/Facilities
+};
+
+/* ============================================================
    v1.6 #17: MAN OF THE MATCH & SCORER ATTRIBUTION
    ------------------------------------------------------------
    MOTM is computed from the REAL match log only (goals, assists, saves, tackles, key passes,
@@ -1242,6 +1331,7 @@ const Engine = {
   DEF_SCENARIOS, defChoiceOdds, shootoutKickOdds, penaltyShootout,
   TRAIN, SKILL_WEEKS, skillWeeks,
   motmScore, motmThreshold, pickMOTM, attributeGoals, seasonScore,
+  ECON,
   LEAGUE_DEFS, leagueForRegion, makeGalaxy, galaxySimMD, galaxyRollover,
   ctMake, ctClub, ctGroupFixtures, ctSimGroups, ctGroupTable, ctAdvanceToKO, ctSimKORound, CT_ROUNDS, CT_GROUP_AFTER_MD
 };

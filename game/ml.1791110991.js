@@ -96,6 +96,9 @@ function mlLoad() {
   if (M) {
     try { mlEnsureTrainers(); } catch (e) {}
     if (M.lc === undefined) M.lc = 20; // migration: starter LC grant
+    mlEnsureEco();   // #16: ledger + matchday caps exist on old saves too
+    mlEnsureInfra(); // #12: infrastructure trees exist on old saves too
+    if (M.div) mlDivEnsure(); // #15: only touch the ladder if it exists (created on first visit)
     // migrate old flat-boost cards to the new tier system
     const rng = E.mulberry32(E.hashSeed(M.seed + ":cardmig"));
     for (const p of M.squad || []) {
@@ -127,18 +130,11 @@ function mlGenPlayer(rng, region, bucket, ovr) {
 function mlApplySpecialTier(p, cardId, rng) {
   p.cardId = cardId;
   p.card = (ML_CARDS[cardId] && ML_CARDS[cardId].label) || cardId.toUpperCase();
-  if (cardId === "trending") {
-    p.ovr = Math.max(p.ovr, 83 + Math.floor(rng() * 5));
-    p.pot = Math.max(p.pot, Math.min(94, p.ovr + 4 + Math.floor(rng() * 4)));
-  } else if (cardId === "showtime") {
-    p.ovr = Math.max(p.ovr, 87 + Math.floor(rng() * 5));
-    p.pot = Math.max(p.pot, Math.min(97, p.ovr + 4 + Math.floor(rng() * 4)));
-  } else if (cardId === "bigtime") {
-    p.ovr = Math.max(p.ovr, 89 + Math.floor(rng() * 5));
-    p.pot = Math.max(p.pot, Math.min(98, p.ovr + 4 + Math.floor(rng() * 4)));
-  } else if (cardId === "legendary") {
-    p.ovr = Math.max(p.ovr, 92 + Math.floor(rng() * 5));
-    p.pot = Math.max(p.pot, Math.min(99, p.ovr + 3 + Math.floor(rng() * 4)));
+  const band = E.ECON.tierOvr(cardId); // #16: bands published in the engine, applied here - one source
+  if (band) {
+    const potCap = cardId === "trending" ? 94 : cardId === "showtime" ? 97 : cardId === "bigtime" ? 98 : 99;
+    p.ovr = Math.max(p.ovr, band[0] + Math.floor(rng() * (band[1] - band[0])));
+    p.pot = Math.max(p.pot, Math.min(potCap, p.ovr + 4 + Math.floor(rng() * 4)));
   }
   mlGiveSkills(p, rng);
   p.value = mlValue(p.ovr, p.age) * (cardId === "legendary" ? 1.6 : 1.3);
@@ -151,8 +147,49 @@ const ML_TRAINERS = {
   silver: { label: "\ud83e\udd48 Silver Trainer", exp: 80,  price: 0.7 },
   gold:   { label: "\ud83e\udd47 Gold Trainer",   exp: 200, price: 1.6 }
 };
-function mlExpNeed(p) { return 60 + Math.max(0, p.ovr - 50) * 8; } // EXP for next OVR point
+function mlExpNeed(p) { // #12: better coaching staff = less XP per OVR point (published 12%/level)
+  const base = 60 + Math.max(0, p.ovr - 50) * 8;
+  return Math.ceil(base / E.TRAIN.coachMul(mlInfraCoach()));
+}
 function mlTrainerFor(ovr) { return ovr < 65 ? "bronze" : ovr < 75 ? "silver" : "gold"; }
+function mlEnsureInfra() { // #12: Club Infrastructure Hub state (migration-safe)
+  M.infra = M.infra || { stadium: 0, staff: 0, academy: 0, facilities: 0 };
+  for (const k of ["stadium", "staff", "academy", "facilities"]) {
+    if (typeof M.infra[k] !== "number") M.infra[k] = 0;
+    M.infra[k] = Math.max(0, Math.min(E.ECON.INFRA_MAX, M.infra[k]));
+  }
+}
+function mlInfraLvl(tree) { mlEnsureInfra(); return M.infra[tree] || 0; }
+function mlInfraCoach() { return mlInfraLvl("staff"); }     // coach XP + training speed
+function mlInfraScout() { return mlInfraLvl("staff"); }     // #13 dossier depth
+function mlEnsureEco() { // #16: auditable ledger + matchday consumable caps
+  M.ledger = M.ledger || [];
+  M.mdUsed = M.mdUsed || { trainers: 0, packs: 0 };
+  if (typeof M.mdUsed.trainers !== "number") M.mdUsed.trainers = 0;
+  if (typeof M.mdUsed.packs !== "number") M.mdUsed.packs = 0;
+}
+function mlEco(gpDelta, lcDelta, label) { // EVERY gp/lc movement goes through here; nothing bypasses it
+  mlEnsureEco();
+  const gp = Math.round((gpDelta || 0) * 100) / 100, lc = Math.round((lcDelta || 0) * 100) / 100;
+  if (!gp && !lc) return;
+  M.budget = Math.round((M.budget + gp) * 100) / 100;
+  M.lc = Math.round(((M.lc || 0) + lc) * 100) / 100;
+  M.ledger.push({ s: M.season, md: M.matchday, label: label, gp: gp, lc: lc, budget: M.budget, lc_bal: M.lc });
+  if (M.ledger.length > 400) M.ledger.shift();
+}
+function mlMdReset() { mlEnsureEco(); M.mdUsed = { trainers: 0, packs: 0 }; }
+function mlCapLeft(kind) { mlEnsureEco(); return kind === "trainers" ? Math.max(0, E.ECON.MD_TRAINER_CAP - M.mdUsed.trainers) : Math.max(0, E.ECON.MD_PACK_CAP - M.mdUsed.packs); }
+function mlCapUse(kind) { mlEnsureEco(); if (mlCapLeft(kind) <= 0) return false; M.mdUsed[kind]++; return true; }
+function mlLedgerTotals() {
+  mlEnsureEco();
+  const t = {};
+  for (const x of M.ledger) {
+    const k = x.label.replace(/ \u00b7 .*$/, "");
+    t[k] = t[k] || { gp: 0, lc: 0, n: 0 };
+    t[k].gp += x.gp; t[k].lc += x.lc; t[k].n++;
+  }
+  return t;
+}
 function mlEnsurePlayerStats() { // #17: per-player season log used by MOTM + the awards gala
   M.motmHistory = M.motmHistory || [];
   M.honours = M.honours || [];
@@ -479,6 +516,10 @@ function mlHome() {
     const nw = $("#mlnews"); if (nw) nw.onclick = () => render(mlNewsScreen);
     const tb = $("#mltable"); if (tb) tb.onclick = () => render(mlTableScreen);
     const pk = $("#mlpacks"); if (pk) pk.onclick = () => render(mlPacksScreen);
+    const lg = $("#mlledger"); if (lg) lg.onclick = () => render(mlLedgerScreen);
+    const ifr = $("#mlinfra"); if (ifr) ifr.onclick = () => render(mlInfraScreen);
+    const dv = $("#mldiv"); if (dv) dv.onclick = () => render(mlDivHome);
+    mlDossierWire();
     const ev = $("#mlevent"); if (ev) ev.onclick = () => render(mlEventPreview);
     const rc = $("#mlrevclose"); if (rc) rc.onclick = () => { M.review = null; mlSave(); render(mlHome); };
 
@@ -503,6 +544,9 @@ function mlHome() {
     <div class="tiles">
       <div class="tile" id="mltable"><span class="tileico">\ud83d\udcca</span><span>League</span></div>
       <div class="tile" id="mlpacks"><span class="tileico">\ud83c\udccf</span><span>Card Draws</span></div>
+      <div class="tile" id="mlledger"><span class="tileico">\ud83d\udcc4</span><span>Ledger</span></div>
+      <div class="tile" id="mlinfra"><span class="tileico">\ud83c\udfe2</span><span>Club</span></div>
+      <div class="tile" id="mldiv"><span class="tileico">\ud83c\udfae</span><span>AI Divisions</span></div>
       <div class="tile" id="mlevent"><span class="tileico">\ud83c\udfae</span><span>Event${M.matchday < 18 && M.evDone !== M.season + ":" + M.matchday ? "" : " \u2713"}</span></div>
       <div class="tile" id="mlnews"><span class="tileico">\ud83d\udcf0</span><span>Club News</span></div>
       <div class="tile" id="mlswitch"><span class="tileico">\ud83c\udfe0</span><span>Main Menu</span></div>
@@ -531,6 +575,7 @@ function mlHome() {
     ${(M.trophies && M.trophies.length) ? `<div class="panel"><h2>\ud83c\udfc6 Trophy Cabinet</h2>
       ${M.trophies.map(t => `<div class="kv"><span>Season ${t.s}</span><b>${t.t}</b></div>`).join("")}</div>` : ""}
     ${mlNav()}
+    ${mlDossierHTML()}
   </div>`;
 }
 
@@ -580,7 +625,7 @@ function mlSquadScreen() {
       const block = mlCanRemove(p); if (block) { toast(block); return; }
       const fee = Math.round(p.value * 0.85 * 10) / 10;
       if (!confirm("Sell " + p.name + " for " + fmtM(fee) + "?")) return;
-      M.budget = Math.round((M.budget + fee) * 10) / 10;
+      mlEco(fee, 0, "Transfer sales");
       M.squad = M.squad.filter(x => x.id !== p.id);
       M.soldIds.push(p.id);
       M._sqOpen = null;
@@ -726,6 +771,8 @@ function mlTrainScreen(pid) {
       const tier = b.dataset.use;
       if (M.trainers[tier] <= 0) { toast("None left — win matches or buy in Card Draws"); return; }
       if (p.ovr >= p.pot) { toast("At full potential"); return; }
+      if (mlCapLeft("trainers") <= 0) { toast("\u26a0\ufe0f Matchday trainer cap reached (" + E.ECON.MD_TRAINER_CAP + "/matchday) \u2014 capped on purpose to protect the fitness economy."); return; }
+      mlCapUse("trainers");
       M.trainers[tier]--;
       p.exp = (p.exp || 0) + ML_TRAINERS[tier].exp;
       let ups = 0;
@@ -742,6 +789,7 @@ function mlTrainScreen(pid) {
       if (maxed) { toast("At full potential"); return; }
       const totalTrainers = M.trainers.bronze + M.trainers.silver + M.trainers.gold;
       if (totalTrainers <= 0) { toast("No trainer cards left"); return; }
+      if (mlCapLeft("trainers") <= 0) { toast("\u26a0\ufe0f Matchday trainer cap reached (" + E.ECON.MD_TRAINER_CAP + "/matchday)."); return; }
       let needed = mlExpNeed(p) - (p.exp || 0);
       let ups = 0;
       while (needed > 0 && p.ovr < p.pot) {
@@ -752,6 +800,7 @@ function mlTrainScreen(pid) {
         else if (M.trainers.silver > 0) tier = "silver";
         else if (M.trainers.gold > 0) tier = "gold";
         if (!tier) break;
+        if (!mlCapUse("trainers")) break; // #16: the cap applies to auto-train too
         M.trainers[tier]--;
         p.exp = (p.exp || 0) + ML_TRAINERS[tier].exp;
         while (p.exp >= mlExpNeed(p) && p.ovr < p.pot) {
@@ -779,6 +828,7 @@ function mlTrainScreen(pid) {
         else if (M.trainers.silver > 0) tier = "silver";
         else if (M.trainers.bronze > 0) tier = "bronze";
         if (!tier) break;
+        if (!mlCapUse("trainers")) break; // #16: the cap applies to max-train too
         M.trainers[tier]--;
         p.exp = (p.exp || 0) + ML_TRAINERS[tier].exp;
         while (p.exp >= mlExpNeed(p) && p.ovr < p.pot) {
@@ -924,6 +974,7 @@ function mlMarketScreen() {
   const pool = mlMarketPool();
   const star = mlBalStar();
   setTimeout(() => {
+    mlDossierWire();
     document.querySelectorAll("[data-buy]").forEach(b => b.onclick = () => {
       const id = +b.dataset.buy;
       const p = (star && star.id === id) ? star : pool.find(x => x.id === id);
@@ -964,10 +1015,10 @@ function mlMarketScreen() {
         closeModal();
         if (p.lcPrice) {
           if ((M.lc || 0) < p.lcPrice) { toast("Not enough LC"); return; }
-          M.lc -= p.lcPrice;
+          mlEco(0, -p.lcPrice, "Transfer buy (LC)");
         } else {
           if (M.budget < price) { toast("Not enough GP budget"); return; }
-          M.budget = Math.round((M.budget - price) * 10) / 10;
+          mlEco(-price, 0, "Transfer buy (GP)");
         }
         M.squad.push(Object.assign({}, p));
         if (p.bal) M.boughtBal = true;
@@ -1004,6 +1055,150 @@ function mlMarketScreen() {
     ${mlNav()}</div>`;
 }
 
+// ---------- #13 Transfer Club Info Dossier (modal, scouting-gated) ----------
+function mlClubForm(idx, n) { // real recent form from the matchday log
+  const out = [];
+  for (let i = (M.results || []).length - 1; i >= 0 && out.length < (n || 5); i--) {
+    const r = M.results[i];
+    if (r.home !== idx && r.away !== idx) continue;
+    const meHome = r.home === idx;
+    const my = meHome ? r.gH : r.gA, op = meHome ? r.gA : r.gH;
+    out.push({ res: my > op ? "W" : my === op ? "D" : "L", my: my, op: op, opp: M.world.clubs[meHome ? r.away : r.home] });
+  }
+  return out;
+}
+function mlDossierData(idx) {
+  mlEnsureInfra();
+  const club = M.world.clubs[idx];
+  if (!club) return null;
+  const tier = mlInfraScout();                       // #12 staff tree = scouting depth
+  const table = E.computeTable(M.world.clubs, M.results);
+  const pos = table.findIndex(t => t.i === idx) + 1;
+  const myPos = table.findIndex(t => t.i === M.clubIdx) + 1;
+  const mine = idx === M.clubIdx;
+  const row = table.find(t => t.i === idx) || {};
+  const h2h = ((M.world.h2h || {})["0v" + idx]) || [];
+  let hw = 0, hd = 0, hl = 0;
+  for (const r of h2h) {
+    const meHome = r.home === M.clubIdx;
+    const my = meHome ? r.gH : r.gA, op = meHome ? r.gA : r.gH;
+    if (my > op) hw++; else if (my === op) hd++; else hl++;
+  }
+  const strength = mine ? mlTeamStr(0) : club.str;
+  const band = strength >= 84 ? "Elite" : strength >= 78 ? "Upper" : strength >= 72 ? "Mid" : "Lower";
+  return {
+    idx, name: club.name, short: club.short, mine, tier,
+    league: M.tier === 0 ? (E.REGION_LEAGUES[M.region] || "National League") : "Continental Super League",
+    pos, of: M.world.clubs.length, myPos,
+    strength, myStrength: mlTeamStr(0), delta: strength - mlTeamStr(0),
+    style: mlStyleOf(club), manager: mlManagerOf(club),
+    form: mlClubForm(idx, 5), gf: row.GF, ga: row.GA, pts: row.Pts, band,
+    h2h: { w: hw, d: hd, l: hl, n: h2h.length },
+    stars: mine ? mlXIPlayers().slice().sort((a, b) => (E.seasonScore(b) - E.seasonScore(a))).slice(0, 3)
+                 .map(p => ({ name: p.name, pos: p.pos, ovr: p.ovr, goals: p.goals || 0, assists: p.assists || 0 })) : null
+  };
+}
+function mlDossierHTML() {
+  if (M._dossier == null) return "";
+  const d = mlDossierData(M._dossier);
+  if (!d) return "";
+  const gated = (need, body) => d.tier >= need ? body : `<p class="sub">\ud83d\udd0e Locked \u2014 scouting tier ${need} needed (Club \u2192 Staff). Your tier: <b>${d.tier}</b>.</p>`;
+  return `<div class="pausemodal" id="mldossier">
+    <div class="pausecard">
+      <div class="decision-head">\ud83d\udccb ${d.name}${d.mine ? " (YOU)" : ""}</div>
+      <div class="kv"><span>Competition</span><b>${d.league} \u00b7 ${d.pos} of ${d.of}${d.mine ? "" : " <span class=\"sub\">(you: #" + d.myPos + ")</span>"}</b></div>
+      <div class="kv"><span>Squad strength</span><b>${d.strength} <span class="sub">(you: ${d.myStrength} \u00b7 ${d.delta === 0 ? "level" : d.delta > 0 ? "+" + d.delta + " to them" : Math.abs(d.delta) + " to you"})</span></b></div>
+      ${d.pts != null ? `<div class="kv"><span>Record</span><b>${d.pts} pts \u00b7 ${d.gf}-${d.ga} goals</b></div>` : ""}
+      ${gated(1, `<div class="kv"><span>Playing style</span><b>${d.style}</b></div>`)}
+      ${gated(2, `<div class="kv"><span>Manager</span><b>${d.manager || "unknown"}</b></div>
+        <div class="kv"><span>Recent form</span><b>${d.form.map(f => f.res).join(" ") || "\u2014"} <span class="sub">${d.form.map(f => f.my + "-" + f.op).join(", ")}</span></b></div>`)}
+      ${gated(3, `<div class="kv"><span>Budget tier</span><b>${d.band}</b></div>
+        <div class="kv"><span>Head-to-head vs you</span><b>${d.h2h.n ? d.h2h.w + "W " + d.h2h.d + "D " + d.h2h.l + "L" : "never met"}</b></div>`)}
+      ${gated(4, d.stars ? `<div class="kv"><span>\ud83c\udf1f Star players</span><b>${d.stars.map(p => p.name + " (" + p.pos + " " + p.ovr + ", " + p.goals + "G)").join(" \u00b7 ") || "\u2014"}</b></div>`
+        : `<p class="sub">\ud83c\udf1f Star players: the engine models AI clubs by squad strength only \u2014 there are no player names to report, so we say so instead of inventing them.</p>`)}
+      ${d.tier >= 5 ? `<div class="kv"><span>\ud83c\udfc6 Honours</span><b>${d.mine ? ((M.trophies || []).length ? M.trophies.map(t => "S" + t.s + " " + t.t).join(" \u00b7 ") : "none yet") : "not tracked for AI clubs"}</b></div>` : ""}
+      <button class="btn" id="mldossierx">CLOSE</button>
+    </div>
+  </div>`;
+}
+function mlDossierOpen(idx, host) {
+  M._dossier = idx; M._dossierHost = host || "home";
+  render(ML_DOSSIER_HOSTS[M._dossierHost] || mlHome);
+}
+var ML_DOSSIER_HOSTS = { home: mlHome, market: mlMarketScreen, table: mlTableScreen, preview: mlPreview, squad: mlSquadScreen, infra: mlInfraScreen, ledger: mlLedgerScreen };
+function mlDossierWire() { // called from each host screen's setTimeout
+  document.querySelectorAll("[data-dossier]").forEach(b => b.onclick = () => mlDossierOpen(+b.dataset.dossier, b.dataset.host || "home"));
+  const x = $("#mldossierx"); if (x) x.onclick = () => { M._dossier = null; render(ML_DOSSIER_HOSTS[M._dossierHost] || mlHome); };
+}
+
+// ---------- #12 Club Infrastructure Hub ----------
+function mlInfraScreen() {
+  mlEnsureInfra();
+  setTimeout(() => {
+    document.querySelectorAll("[data-infra]").forEach(b => b.onclick = () => {
+      const tree = b.dataset.infra, cost = E.ECON.infraCost(tree, mlInfraLvl(tree));
+      if (!cost) return;
+      if (M.budget < cost.gp) { toast("Not enough GP \u2014 enjoy the gate receipts"); return; }
+      if ((M.lc || 0) < cost.lc) { toast("Not enough LC"); return; }
+      mlEco(-cost.gp, -cost.lc, "Club upgrades");
+      M.infra[tree] = cost.next;
+      mlNews("\ud83c\udfe2 " + E.ECON.INFRA[tree].label + " upgraded to LV " + cost.next + " \u2014 " + E.ECON.INFRA[tree].effect(cost.next) + ".");
+      mlSave(); toast(E.ECON.INFRA[tree].label + " \u2192 LV " + cost.next);
+      render(mlInfraScreen);
+    });
+  }, 0);
+  const gateNow = E.ECON.gateMult(mlInfraLvl("stadium"));
+  const rows = Object.keys(E.ECON.INFRA).map(tree => {
+    const def = E.ECON.INFRA[tree], lvl = mlInfraLvl(tree), cost = E.ECON.infraCost(tree, lvl);
+    return `<div class="panel">
+      <h2>${def.ico} ${def.label} <span class="badge">LV ${lvl}/${E.ECON.INFRA_MAX}</span></h2>
+      <p class="sub" style="margin:0 0 6px">${def.desc}</p>
+      <div class="kv"><span>Effect now</span><b>${lvl ? def.effect(lvl) : "\u2014 (no upgrade yet)"}</b></div>
+      ${cost ? `<div class="kv"><span>Next level (LV ${cost.next})</span><b>${def.effect(cost.next)}</b></div>
+        <button class="btn ${cost.lc ? "gold" : ""}" data-infra="${tree}">UPGRADE \u00b7 ${fmtM(cost.gp)}${cost.lc ? " + " + cost.lc + " LC" : ""}</button>`
+        : `<p class="sub">Fully upgraded \u2705</p>`}
+    </div>`;
+  }).join("");
+  return `<div class="screen">${mlTopbar()}
+    <div class="panel"><h2>\ud83c\udfe2 Club Infrastructure Hub</h2>
+      <p class="sub">Four trees, five levels each. Every line of effect text is the exact number the engine applies \u2014 gate multiplier, training XP, fitness drain, recovery, youth intake and trainer luck. Upgrades are bought with GP (gate receipts) and LC (objectives, awards, milestones).</p>
+      <div class="kv"><span>Gate multiplier now</span><b>\u00d7${gateNow.toFixed(2)}</b></div>
+      <div class="kv"><span>Training speed</span><b>\u00d7${E.TRAIN.coachMul(mlInfraCoach()).toFixed(2)} XP</b></div>
+      <div class="kv"><span>Scouting tier</span><b>${mlInfraScout()} <span class="sub">(unlocks club dossier depth)</span></b></div>
+      <div class="kv"><span>Balances</span><b>${fmtM(M.budget)} \u00b7 ${Math.round(M.lc || 0)} LC</b></div>
+    </div>
+    ${rows}
+    ${mlNav()}</div>`;
+}
+
+// ---------- #16 economy ledger ----------
+function mlLedgerScreen() {
+  mlEnsureEco();
+  const totals = mlLedgerTotals();
+  const keys = Object.keys(totals).sort((a, b) => Math.abs(totals[b].gp) - Math.abs(totals[a].gp));
+  const gpIn = M.ledger.reduce((t, x) => t + Math.max(0, x.gp), 0);
+  const gpOut = M.ledger.reduce((t, x) => t + Math.min(0, x.gp), 0);
+  const lcIn = M.ledger.reduce((t, x) => t + Math.max(0, x.lc), 0);
+  const lcOut = M.ledger.reduce((t, x) => t + Math.min(0, x.lc), 0);
+  return `<div class="screen">${mlTopbar()}
+    <div class="panel"><h2>\ud83d\udcc4 Economy Ledger</h2>
+      <p class="sub">Every GP and LC movement in this save, by source. Both currencies are separate: <b>GP</b> is gate receipts and prizes (stadium level scales the gate), <b>LC</b> comes from objectives, awards, milestones and rank rewards only.</p>
+      <div class="kv"><span>GP in / out</span><b style="color:var(--green)">+${fmtM(gpIn)}</b> / <b style="color:var(--red)">${fmtM(gpOut)}</b></div>
+      <div class="kv"><span>LC in / out</span><b style="color:var(--green)">+${Math.round(lcIn)}</b> / <b style="color:var(--red)">${Math.round(lcOut)}</b></div>
+      <div class="kv"><span>Balances now</span><b>${fmtM(M.budget)} \u00b7 ${Math.round(M.lc || 0)} LC</b></div>
+      <div class="kv"><span>Matchday caps left</span><b>${mlCapLeft("trainers")}/${E.ECON.MD_TRAINER_CAP} trainers \u00b7 ${mlCapLeft("packs")}/${E.ECON.MD_PACK_CAP} draws</b></div>
+    </div>
+    <div class="panel"><h2>By source</h2>
+      ${keys.map(k => `<div class="kv"><span>${k} <span class="sub">(${totals[k].n}\u00d7)</span></span><b>${totals[k].gp ? (totals[k].gp > 0 ? "+" : "") + fmtM(totals[k].gp) + " GP" : ""}${totals[k].gp && totals[k].lc ? " \u00b7 " : ""}${totals[k].lc ? (totals[k].lc > 0 ? "+" : "") + Math.round(totals[k].lc) + " LC" : ""}</b></div>`).join("") || '<p class="sub">Nothing recorded yet this save.</p>'}
+    </div>
+    <div class="panel"><h2>Recent movements</h2>
+      <div style="max-height:320px;overflow:auto">
+      ${M.ledger.slice(-40).reverse().map(x => `<div class="kv"><span>S${x.s} MD${x.md + 1} \u00b7 ${x.label}</span><b>${x.gp ? (x.gp > 0 ? "+" : "") + fmtM(x.gp) + " GP" : ""}${x.gp && x.lc ? " \u00b7 " : ""}${x.lc ? (x.lc > 0 ? "+" : "") + Math.round(x.lc) + " LC" : ""}</b></div>`).join("") || '<p class="sub">No movements recorded yet.</p>'}
+      </div>
+    </div>
+    ${mlNav()}</div>`;
+}
+
 // ---------- packs ----------
 function mlPacksScreen() {
   mlEnsureTrainers();
@@ -1011,39 +1206,34 @@ function mlPacksScreen() {
     document.querySelectorAll("[data-buytr]").forEach(b => b.onclick = () => {
       const tier = b.dataset.buytr, t = ML_TRAINERS[tier];
       if (M.budget < t.price) { toast("Not enough GP"); return; }
-      M.budget = Math.round((M.budget - t.price) * 10) / 10;
+      mlEco(-t.price, 0, "Trainer purchase");
       mlEnsureTrainers(); M.trainers[tier]++;
       mlSave(); toast(t.label + " added"); render(mlPacksScreen);
     });
     document.querySelectorAll("[data-pack]").forEach(b => b.onclick = () => {
       const kind = b.dataset.pack;
+      const PACKDEF = E.ECON.PACKS[kind];
+      if (!PACKDEF) return;
       if (M.squad.length >= 26) { toast("Squad full"); return; }
-      if (kind === "std") {
-        if (M.budget < 3) { toast("Not enough GP budget"); return; }
-        M.budget = Math.round((M.budget - 3) * 10) / 10;
+      if (mlCapLeft("packs") <= 0) { toast("\u26a0\ufe0f Matchday draw cap reached (" + E.ECON.MD_PACK_CAP + "/matchday) \u2014 advance the calendar with a match."); return; } // #16
+      if (PACKDEF.currency === "gp") {
+        if (M.budget < PACKDEF.price) { toast("Not enough GP budget"); return; }
+        mlEco(-PACKDEF.price, 0, "Card draws");
       } else {
-        const lcCost = kind === "star" ? 30 : 60;
-        if ((M.lc || 0) < lcCost) { toast("Not enough LC \u2014 earn it from cups, trophies & big performances"); return; }
-        M.lc -= lcCost;
+        if ((M.lc || 0) < PACKDEF.price) { toast("Not enough LC \u2014 earn it from cups, trophies & big performances"); return; }
+        mlEco(0, -PACKDEF.price, "Card draws");
       }
+      mlCapUse("packs");
       M.packsBought++;
       const rng = E.mulberry32(E.hashSeed(M.seed + ":pack:" + M.packsBought));
       const bucket = ["GK", "DF", "MF", "MF", "FW"][Math.floor(rng() * 5)];
       let p;
-      if (kind === "std") {
-        p = mlGenPlayer(rng, M.region, bucket, 66 + Math.floor(rng() * 11));
-        p.cardId = null; p.card = null; p.skills = [];
-      } else if (kind === "star") {
-        p = mlGenPlayer(rng, M.region, bucket, 78 + Math.floor(rng() * 6));
-        const roll = rng();
-        const cardId = roll < 0.08 ? "legendary" : roll < 0.38 ? "bigtime" : roll < 0.68 ? "showtime" : "trending";
-        mlApplySpecialTier(p, cardId, rng);
-      } else { // "leg" — Legend Draw: guaranteed showtime+, big legendary chance
-        p = mlGenPlayer(rng, M.region, bucket, 86 + Math.floor(rng() * 6));
-        const roll = rng();
-        const cardId = roll < 0.30 ? "legendary" : roll < 0.70 ? "bigtime" : "showtime";
-        mlApplySpecialTier(p, cardId, rng);
-      }
+      const ovrLo = PACKDEF.ovr[0], ovrHi = PACKDEF.ovr[1];
+      const cardId = E.ECON.rollCard(kind, rng()); // #16: the SAME table the screen prints
+      p = mlGenPlayer(rng, M.region, bucket, ovrLo + Math.floor(rng() * (ovrHi - ovrLo + 1)));
+      if (kind === "std") { p.cardId = null; p.card = null; p.skills = []; }
+      else mlApplySpecialTier(p, cardId, rng);
+      M.drawLog = M.drawLog || []; M.drawLog.push({ md: M.matchday, kind, cardId: cardId, card: p.card }); if (M.drawLog.length > 60) M.drawLog.shift();
       M.squad.push(p); mlAutoXI(); mlNews("DRAW: " + p.name + " (" + p.ovr + " " + p.pos + (p.card ? " \u00b7 " + p.card : "") + ")");
       mlSave(); toast("\ud83c\udccf " + p.name + " \u00b7 OVR " + p.ovr + (p.card ? " \u00b7 " + p.card : ""));
       render(mlPacksScreen);
@@ -1051,10 +1241,15 @@ function mlPacksScreen() {
   }, 0);
   return `<div class="screen">${mlTopbar()}
     <div class="panel"><h2>\ud83c\udccf Card Draws</h2>
-      <p class="sub">Funded from your transfer budget. Odds are the generation ranges shown \u2014 nothing hidden.</p>
-      <div class="kv"><span><b>Standard Draw</b><br><span class="sub">OVR 66\u201377 \u00b7 STANDARD card \u00b7 no skills</span></span><button class="btn secondary" data-pack="std">3.0M GP</button></div>
-      <div class="kv"><span><b>\u2b50 Star Draw</b><br><span class="sub">OVR 83\u201391 \u00b7 TRENDING 32% / SHOW TIME 30% / BIG TIME 30% / LEGENDARY 8%</span></span><button class="btn gold" data-pack="star">30 LC</button></div>
-      <div class="kv"><span><b>\ud83d\udc51 Legend Draw</b><br><span class="sub">OVR 87\u201396 \u00b7 SHOW TIME 30% / BIG TIME 40% / LEGENDARY 30%</span></span><button class="btn gold" data-pack="leg">60 LC</button></div>
+      <p class="sub">Funded from your transfer budget. Drop rates below come straight from <code>Engine.ECON.PACKS</code> \u2014 the same table the roll reads, so a printed % can never drift from the real one.
+      Matchday draw cap: <b>${mlCapLeft("packs")}/${E.ECON.MD_PACK_CAP}</b> left.</p>
+      ${Object.keys(E.ECON.PACKS).map(k => {
+        const p2 = E.ECON.PACKS[k];
+        const rg = E.ECON.packOvrRange(k);
+        const odds = p2.table.map(r => (r.cardId ? (ML_CARDS[r.cardId] ? ML_CARDS[r.cardId].label : r.cardId.toUpperCase()) : "STANDARD") + " " + r.pct + "%").join(" \u00b7 ");
+        return `<div class="kv"><span><b>${p2.label}</b><br><span class="sub">OVR ${rg[0]}\u2013${rg[1]} \u00b7 ${odds}${k === "std" ? " \u00b7 no skills" : ""}</span></span>
+          <button class="btn ${p2.currency === "lc" ? "gold" : "secondary"}" data-pack="${k}">${p2.currency === "gp" ? p2.price + ".0M GP" : p2.price + " LC"}</button></div>`;
+      }).join("")}
       <p class="sub">\ud83e\ude99 LC comes from cup runs, trophies, top-3 finishes, star performances and daily logins \u2014 or Become a Legend awards.</p>
     </div>
     <div class="panel"><h2>💪 Trainer Cards</h2>
@@ -1072,6 +1267,7 @@ function mlTableScreen() {
   const worldView = M._worldLg != null && M.galaxy && M._worldLg !== M.leagueIdx;
   setTimeout(() => {
     document.querySelectorAll("[data-mlworldlg]").forEach(b => b.onclick = () => { M._worldLg = +b.dataset.mlworldlg; render(mlTableScreen); });
+    mlDossierWire();
   }, 0);
   const worldTabs = M.galaxy ? `<div class="viewrow" style="flex-wrap:wrap;gap:4px;margin-bottom:6px">
     ${M.galaxy.leagues.map((L, li) => `<button class="btn secondary ${((M._worldLg == null ? M.leagueIdx : M._worldLg) === li) ? "on" : ""}" data-mlworldlg="${li}" style="flex:1 1 30%;font-size:.72rem;padding:6px 4px">${L.name.split(" ")[0]}${li === M.leagueIdx ? " \u2b50" : ""}</button>`).join("")}
@@ -1107,9 +1303,11 @@ function mlTableScreen() {
     ${worldTabs}
     ${table.map((t, i) => `<div class="kv" ${t.i === M.clubIdx ? 'style="color:var(--gold)"' : ""}>
       <span>${i + 1}. ${M.world.clubs[t.i].name}${t.i === M.clubIdx ? " (YOU)" : ""}${mlManagerOf(M.world.clubs[t.i]) ? ` <span class="sub">\ud83c\udfae ${mlManagerOf(M.world.clubs[t.i])}</span>` : ""}</span>
+      <button class="btn secondary" data-dossier="${t.i}" data-host="table" style="padding:5px 10px;font-size:.68rem">\ud83d\udccb INFO</button>
       <b>${t.Pts} pts \u00b7 ${t.GF}-${t.GA}</b></div>`).join("")}</div>
     ${ctPanel}
-    ${mlNav()}</div>`;
+    ${mlNav()}
+    ${mlDossierHTML()}</div>`;
 }
 var ML_NEWS_CAT = "all";
 function mlNewsScreen() {
@@ -1328,7 +1526,7 @@ function mlPreview() {
     const bn = $("#mlbench"); if (bn) bn.onclick = () => render(mlBenchScreen);
     const sc = $("#mlscout"); if (sc) sc.onclick = () => {
       if (M.budget < 0.3) { toast("\u274c Not enough GP (0.3M needed)"); return; }
-      M.budget = Math.round((M.budget - 0.3) * 100) / 100;
+      mlEco(-0.3, 0, "Scouting reports");
       M.scouted = M.scouted || []; M.scouted.push(oppClub.name); mlSave(); render(mlPreview);
     };
   }, 0);
@@ -1828,8 +2026,8 @@ function mlFinish(fx, r, probs) {
     try { E.galaxySimMD(M.galaxy, M.tier === 0 ? M.leagueIdx : -1, M.matchday, M.seed, M.season); } catch (e) {}
   }
   mlDriftForm(); // form moves every matchday
-  if (res === "W" && Math.abs(myG - opG) >= 3) { M.lc = (M.lc || 0) + 1; mlNews("\ud83e\ude99 Statement win! +1 LC."); }
-  if (fx.cup && res === "W") { M.lc = (M.lc || 0) + 2; }
+  if (res === "W" && Math.abs(myG - opG) >= 3) { mlEco(0, 1, "Statement wins"); mlNews("\ud83e\ude99 Statement win! +1 LC."); }
+  if (fx.cup && res === "W") { mlEco(0, 2, "Cup progress"); }
   // finances
   const wages = M.squad.reduce((s, p) => s + p.wage, 0) / 1000; // M per MD
   let prize = res === "W" ? 0.6 : res === "D" ? 0.3 : 0.1; // net profit AFTER gate receipts cover the wage bill
@@ -1845,7 +2043,7 @@ function mlFinish(fx, r, probs) {
       if (M.ct.gPlayed >= 6) {
         E.ctAdvanceToKO(M.ct, M.galaxy, M.seed + ":s" + M.season);
         mlNews(M.ct.alive ? "\ud83c\udf0d GROUP STAGE COMPLETE \u2014 you're in the QUARTER-FINALS! (+3 LC)" : "\ud83c\udf0d Group stage over \u2014 eliminated. The Trophy moves on without us.");
-        if (M.ct.alive) M.lc = (M.lc || 0) + 3;
+        if (M.ct.alive) mlEco(0, 3, "Continental progress");
         else { // sim the rest of the tournament to a champion
           while (M.ct.ko.length > 1 && M.ct.koRound <= 2) {
             const rr = E.ctSimKORound(M.ct, M.galaxy, M.seed + ":s" + M.season, false, null);
@@ -1861,7 +2059,7 @@ function mlFinish(fx, r, probs) {
       const pre = fx.koPre;
       const next = pre.next.map(x => x === null ? (win ? meE : fx.opp) : x);
       if (win) {
-        M.lc = (M.lc || 0) + [3, 5, 15][M.ct.koRound];
+        mlEco(0, [3, 5, 15][M.ct.koRound], "Continental progress");
         prize += [1.5, 2.5, 6][M.ct.koRound];
         mlNews("\ud83c\udf0d " + E.CT_ROUNDS[M.ct.koRound] + " WON" + (pensTb ? " on penalties (" + (r.penScore ? r.penScore.join("-") : "shootout") + ")" : "") + "! +" + [3, 5, 15][M.ct.koRound] + " LC");
         if (M.ct.koRound >= 2) {
@@ -1885,7 +2083,7 @@ function mlFinish(fx, r, probs) {
         M.ct.ko = next; M.ct.koRound++;
       }
     }
-    M.budget = Math.round((M.budget + prize) * 10) / 10;
+    mlEco(prize * E.ECON.gateMult((M.infra && M.infra.stadium) || 0), 0, "Continental gates");
     // CT fitness cost mirrors league matches
     for (const p of M.squad) {
       if (M.xi.includes(p.id)) p.fit = Math.max(0, p.fit - 25);
@@ -1927,6 +2125,7 @@ function mlFinish(fx, r, probs) {
       M.results.push({ home: h, away: a2, gH: sim.gH, gA: sim.gA });
     }
     M.matchday++;
+    mlMdReset(); // #16: a new matchday restores the trainer/draw caps
   }
   // ---- #17 MOTM + real per-player attribution (the goals came from the engine; we only name them) ----
   mlEnsurePlayerStats();
@@ -1966,18 +2165,23 @@ function mlFinish(fx, r, probs) {
   mlEnsureTrainers();
   let drops = [];
   const drng = E.mulberry32(E.hashSeed(M.seed + ":drop:" + M.season + ":" + M.matchday + ":" + myG + opG));
-  if (res === "W") { const t = drng() < 0.30 ? "silver" : "bronze"; M.trainers[t]++; drops.push(ML_TRAINERS[t].label); }
+  if (res === "W") { const t = drng() < 0.30 + 0.05 * mlInfraLvl("facilities") ? "silver" : "bronze"; M.trainers[t]++; drops.push(ML_TRAINERS[t].label); } // #12 Facilities
   if (evWon.length) { M.trainers.silver++; drops.push(ML_TRAINERS.silver.label); }
   if (fx.cup && (res === "W")) { M.trainers.gold++; drops.push(ML_TRAINERS.gold.label); }
   if (drops.length) mlNews("\ud83c\udf81 TRAINERS EARNED: " + drops.join(" + "));
-  M.budget = Math.round((M.budget + prize + evGp) * 10) / 10; // wages covered by matchday gate receipts
+  mlEco(prize * E.ECON.gateMult((M.infra && M.infra.stadium) || 0) + evGp, 0, "Gate receipts & prizes");
   // fitness bookkeeping
-  for (const p of M.squad) {
-    if (p._sub === "off") p.fit = Math.max(0, p.fit - 15);
-    else if (p._sub === "on") p.fit = Math.max(0, p.fit - 10);
-    else if (M.xi.includes(p.id)) p.fit = Math.max(0, p.fit - 25);
-    else p.fit = Math.min(100, p.fit + 30);
-    delete p._sub;
+  {
+    const fitLvl = Math.min(3, mlInfraLvl("staff")), facLvl = mlInfraLvl("facilities");
+    const drain = 1 - 0.06 * fitLvl;            // #12 Staff: a point of fitness per level
+    const rest = 30 + E.ECON.recoveryBonus(0, facLvl); // #12 Facilities: recovery per rest week
+    for (const p of M.squad) {
+      if (p._sub === "off") p.fit = Math.max(0, p.fit - Math.round(15 * drain));
+      else if (p._sub === "on") p.fit = Math.max(0, p.fit - Math.round(10 * drain));
+      else if (M.xi.includes(p.id)) p.fit = Math.max(0, p.fit - Math.round(25 * drain));
+      else p.fit = Math.min(100, p.fit + rest);
+      delete p._sub;
+    }
   }
   mlNews((fx.cup ? "\ud83c\udfc6 " : "") + `${res === "W" ? "WIN" : res === "D" ? "DRAW" : "LOSS"} ${myG}-${opG} vs ${M.world.clubs[meHome ? fx.away : fx.home].short}. Net +${fmtM(prize)} (gate receipts covered ${fmtM(wages)} wages).`);
   mlSave();
@@ -1996,6 +2200,188 @@ function mlFinish(fx, r, probs) {
       <button class="btn" onclick="render(mlHome)">CONTINUE \u2794</button>
     </div>
   </div>`);
+}
+
+// ---------- #15 eFootball AI Divisions (10-game campaign phases, D10 -> D1) ----------
+function mlDivEnsure() {
+  M.div = M.div || { div: 10, ph: { p: 0, w: 0, d: 0, l: 0 }, hist: [], best: 10, loan: null, useMine: true };
+  if (typeof M.div.div !== "number") M.div.div = 10;
+  M.div.ph = M.div.ph || { p: 0, w: 0, d: 0, l: 0 };
+  M.div.hist = M.div.hist || [];
+  if (typeof M.div.best !== "number") M.div.best = M.div.div;
+  if (typeof M.div.useMine !== "boolean") M.div.useMine = true;
+}
+function mlDivLoanXI() { // a loaned XI so the ladder is playable with an empty squad
+  mlDivEnsure();
+  if (M.div.loan && M.div.loan.length === 11) return M.div.loan;
+  const rng = E.mulberry32(E.hashSeed(M.seed + ":divloan"));
+  const slots = ["GK", "DF", "DF", "DF", "DF", "MF", "MF", "MF", "FW", "FW", "FW"]; // mlGenPlayer takes buckets
+  M.div.loan = slots.map((pos, i) => {
+    const p = mlGenPlayer(rng, M.region, pos, E.ECON.DIV.LOAN_STR + Math.floor(rng() * 6) - 2);
+    p.id = 900000 + i; p.name = "Loan " + p.name.split(" ")[0] + " " + p.name.split(" ")[1];
+    return p;
+  });
+  return M.div.loan;
+}
+function mlDivPlayers() { // your ML squad when it can field an XI, otherwise the loaned XI
+  mlDivEnsure();
+  if (M.div.useMine && (M.squad || []).length >= 11) return M.squad.slice();
+  return mlDivLoanXI();
+}
+function mlDivStr() {
+  const ps = mlDivPlayers().slice().sort((a, b) => b.ovr - a.ovr).slice(0, 11);
+  if (!ps.length) return 60;
+  return Math.round((ps.reduce((t, p) => t + p.ovr, 0) / ps.length) * 10) / 10;
+}
+function mlDivNextFixture() {
+  mlDivEnsure();
+  const div = M.div.div;
+  const rng = E.mulberry32(E.hashSeed(M.seed + ":divfix:" + M.season + ":" + div + ":" + M.div.ph.p));
+  const names = ["Shadow FC", "Neon United", "Iron Harbour", "Kite Athletic", "Atlas City", "Vector SC", "Palm Rangers", "Northgate", "Cobalt FC", "Delta Kings"];
+  const nm = names[(div + M.div.ph.p) % names.length];
+  const home = rng() < 0.5;
+  return { name: nm, str: E.ECON.DIV.aiStr(div), home, tag: "AI D" + div };
+}
+function mlDivHome() {
+  mlDivEnsure();
+  const d = M.div.div, ph = M.div.ph, rules = E.ECON.DIV;
+  const fx = mlDivNextFixture();
+  const mine = mlDivStr();
+  const opp = fx.str;
+  const me = { name: M.clubName || mlClub().name, short: M.clubShort || mlClub().short, str: fx.home ? mine + 4 : mine, home: fx.home, col1: "#e8c15a", col2: "#131a14" };
+  const oppc = { name: fx.name, short: fx.name.split(" ")[0], str: fx.home ? opp : opp + 4, home: !fx.home, col1: "#7fd1ff", col2: "#0d1a22" };
+  const probs = E.winProbs(me, oppc, 600);
+  setTimeout(() => {
+    const b = $("#divplay"); if (b) b.onclick = () => render(() => mlDivMatch(me, oppc, probs));
+    const h = $("#divhome"); if (h) h.onclick = () => render(mlHome);
+    const t = $("#divuse"); if (t) t.onclick = () => { M.div.useMine = !M.div.useMine; mlSave(); render(mlDivHome); };
+  }, 0);
+  return `<div class="screen">${mlTopbar()}
+    <div class="panel">
+      <h2>\ud83c\udfae AI DIVISIONS <span class="badge gold">DIVISION ${d}</span></h2>
+      <p class="sub">A side ladder: <b>${rules.MATCHES} matches per phase</b>, AI squads get stronger every division. Win <b>${rules.PROMOTE_WINS}</b> and you go up; lose <b>${rules.RELEGATE_LOSSES}</b> and you drop. True odds on every match \u2014 same engine as the league.</p>
+      <div class="kv"><span>Phase progress</span><b>${ph.p}/${rules.MATCHES} played \u00b7 ${ph.w}W ${ph.d}D ${ph.l}L</b></div>
+      <div class="mombar" style="margin:4px 0 8px"><div class="momfill" style="width:${Math.round(100 * Math.max(ph.w / rules.PROMOTE_WINS, ph.l / rules.RELEGATE_LOSSES))}%"></div></div>
+      <div class="kv"><span>Ladder position</span><b>D${d} of D${rules.TOP} \u00b7 lifetime best D${M.div.best}</b></div>
+      <div class="kv"><span>Next AI squad (D${d})</span><b>${opp} strength <span class="sub">(${fx.tag}${fx.home ? " \u00b7 away for you" : " \u00b7 at home for you"})</span></b></div>
+      <div class="kv"><span>Your XI (${M.div.useMine && (M.squad || []).length >= 11 ? "ML squad" : "loaned XI"})</span><b>${mine}</b></div>
+      <p class="sub center" style="margin:6px 0 2px">True win probability (never rigged)</p>
+      <div class="probbar"><div class="pb-h" style="flex:${probs.home}">${probs.home}%</div>
+        <div class="pb-d" style="flex:${probs.draw}">${probs.draw}%</div>
+        <div class="pb-a" style="flex:${probs.away}">${probs.away}%</div></div>
+      <button class="btn" id="divplay">PLAY MATCH ${ph.p + 1}/${rules.MATCHES} \u26bd</button>
+      ${(M.squad || []).length >= 11 ? `<button class="btn secondary" id="divuse">${M.div.useMine ? "USE THE LOANED XI INSTEAD" : "USE MY ML SQUAD"}</button>` : ""}
+      <button class="btn secondary" id="divhome">\u2b05 BACK</button>
+    </div>
+    <div class="panel"><h2>Checkpoint rewards</h2>
+      ${[10, 9, 8, 7, 6, 5, 4, 3, 2, 1].map(x => { const r = rules.reward(x, true); return `<div class="kv" ${x === d ? 'style="color:var(--gold)"' : ""}><span>D${x} promotion</span><b>+${fmtM(r.gp)} \u00b7 +${r.lc} LC</b></div>`; }).join("")}
+      <p class="sub">Winning the D1 phase pays ${fmtM(rules.reward(1, true).gp)} + ${rules.reward(1, true).lc} LC and a trophy. Every match shows the engine's own probability before kick-off \u2014 series 0-3, 4-6 or 7-7-6 style phases both count.</p>
+    </div>
+    <div class="panel"><h2>Record by division</h2>
+      ${M.div.hist.length ? M.div.hist.slice(-12).reverse().map(h => `<div class="kv"><span>D${h.div} phase \u00b7 ${h.w}W ${h.d}D ${h.l}L</span><b>${h.result}</b></div>`).join("") : '<p class="sub">No completed phases yet.</p>'}
+      <div class="kv"><span>Lifetime best division</span><b>D${M.div.best}</b></div>
+      ${M.div.champ ? `<div class="kv"><span>\ud83c\udfc6 D1 champion</span><b>${M.div.champ} \u00d7</b></div>` : ""}
+    </div>
+    ${mlNav()}</div>`;
+}
+function mlDivFinish(me, oppc, probs, r) {
+  mlDivEnsure();
+  const rules = E.ECON.DIV, d = M.div.div;
+  const my = me.home ? r.gH : r.gA, op = me.home ? r.gA : r.gH; // real fixture orientation
+  const res = my > op ? "W" : my === op ? "D" : "L";
+  M.div.ph.p++;
+  if (res === "W") M.div.ph.w++; else if (res === "D") M.div.ph.d++; else M.div.ph.l++;
+  let outcome = "";
+  if (M.div.ph.p >= rules.MATCHES) {
+    const nextDiv = rules.next(d, M.div.ph.w, M.div.ph.l);
+    // a won phase is 7+ wins even at D1, where there is nowhere left to climb
+    const promo = M.div.ph.w >= rules.PROMOTE_WINS;
+    const releg = !promo && M.div.ph.l >= rules.RELEGATE_LOSSES;
+    const pay = rules.reward(d, promo);
+    mlEco(pay.gp, pay.lc, "Divisions ladder");
+    outcome = promo ? "PROMOTED to D" + nextDiv : releg ? "RELEGATED to D" + nextDiv : "STAYED in D" + d;
+    M.div.hist.push({ div: d, w: M.div.ph.w, d: M.div.ph.d, l: M.div.ph.l, result: outcome });
+    if (M.div.hist.length > 40) M.div.hist.shift();
+    if (d === 1 && promo) {
+      M.div.champ = (M.div.champ || 0) + 1;
+      M.trophies = M.trophies || []; M.trophies.push({ s: M.season, t: "AI Divisions \u00b7 D1 champion" });
+      mlNews("\ud83c\udfc6 AI DIVISIONS: D1 conquered! Trophy and " + pay.lc + " LC banked.");
+    }
+    M.div.div = nextDiv;
+    if (nextDiv < M.div.best) M.div.best = nextDiv;
+    M.div.ph = { p: 0, w: 0, d: 0, l: 0 };
+    mlNews("\ud83c\udfae AI Divisions: " + outcome + " (" + M.div.hist[M.div.hist.length - 1].w + "W " + M.div.hist[M.div.hist.length - 1].l + "L in D" + d + ").");
+  } else {
+    mlEco(rules.reward(d, false).gp, 0, "Divisions ladder");
+  }
+  mlSave();
+  render(() => `<div class="screen">${mlTopbar()}
+    <div class="panel center">
+      <h1>${res === "W" ? "\ud83c\udf89 WIN" : res === "D" ? "\ud83e\udd1d DRAW" : "\ud83d\ude24 LOSS"}</h1>
+      <h2>${me.short} ${my} - ${op} ${oppc.short}</h2>
+      <p class="sub">AI Divisions \u00b7 D${d} \u00b7 phase ${M.div.ph.p}/${rules.MATCHES} (${M.div.ph.w}W ${M.div.ph.d}D ${M.div.ph.l}L)</p>
+      <p class="sub">Pre-match odds ${probs.home}%/${probs.draw}%/${probs.away}% \u2014 honest engine, upsets included.</p>
+      ${outcome ? `<div class="cardevent">${outcome}</div>` : ""}
+      <button class="btn" id="divback">${M.div.ph.p >= rules.MATCHES || outcome ? "BACK TO DIVISIONS \u2794" : "NEXT MATCH \u2794"}</button>
+    </div>
+    ${mlNav()}</div>`);
+  setTimeout(() => { const b = $("#divback"); if (b) b.onclick = () => render(mlDivHome); }, 0);
+}
+function mlDivMatch(me, oppc, probs) {
+  const seed = E.hashSeed(M.seed + ":divm:" + M.season + ":" + M.div.div + ":" + M.div.ph.p);
+  const match = E.createMatch(me, oppc, { seed });
+  let timer = null, speed = 1, over = false;
+  setTimeout(() => {
+    const clockEl = $("#divclock"), scoreEl = $("#divscore"), tickEl = $("#divticker");
+    function addTick(min, txt, cls) {
+      const el = document.createElement("div");
+      el.className = "tick " + (cls || "");
+      el.innerHTML = `<b>${min}'</b> ${txt}`;
+      tickEl.prepend(el);
+    }
+    function endM() {
+      if (over) return; over = true;
+      clearInterval(timer);
+      const r = match.result();
+      addTick(90, `<b>FULL TIME.</b> ${me.short} ${r.gH} - ${r.gA} ${oppc.short}`, "goal");
+      mlDivFinish(me, oppc, probs, r);
+    }
+    function step() {
+      const s2 = match.step();
+      clockEl.textContent = s2.min + "'";
+      scoreEl.textContent = match.state.gH + " - " + match.state.gA;
+      for (const ev of s2.events) {
+        const side = ev.team === 0 ? me.short : oppc.short;
+        if (ev.type === "goal") addTick(ev.min, `<b>\u26bd GOAL ${side}!</b> ${ev.score[0]}-${ev.score[1]}`, "goal");
+        else if (ev.type === "save") addTick(ev.min, `${side} denied by the keeper!`, "");
+        else if (ev.type === "miss") addTick(ev.min, `${side} off target.`, "");
+        else if (ev.type === "setpiece") addTick(ev.min, `${side} win ${ev.pen ? "a PENALTY!" : "a free kick in range..."}`, "goal");
+      }
+      if (s2.min === 45) addTick(45, "Half-time.", "");
+      if (s2.done || match.state.done) endM();
+    }
+    document.querySelectorAll("[data-divspeed]").forEach(b => b.onclick = () => {
+      speed = +b.dataset.divspeed;
+      document.querySelectorAll("[data-divspeed]").forEach(x => x.classList.toggle("on", +x.dataset.divspeed === speed));
+      clearInterval(timer);
+      timer = setInterval(step, speed === 0.5 ? 520 : speed === 1 ? 240 : speed === 2 ? 90 : 15);
+    });
+    addTick(0, `Kick off! Odds were ${probs.home}/${probs.draw}/${probs.away}.`, "");
+    timer = setInterval(step, 240);
+  }, 0);
+  return `<div class="screen">${mlTopbar()}
+    <div class="panel">
+      <div class="scoreline"><span>${me.short}</span><b id="divscore">0 - 0</b><span>${oppc.short}</span></div>
+      <div class="center"><span class="badge" id="divclock">0'</span></div>
+      <div class="ticker" id="divticker" style="height:260px"></div>
+      <div class="speedrow hudbar">
+        <button class="btn secondary" data-divspeed="0.5">\ud83d\udc22 \u00bdx</button>
+        <button class="btn secondary on" data-divspeed="1">\u25b6 1x</button>
+        <button class="btn secondary" data-divspeed="2">\u23e9 2x</button>
+        <button class="btn secondary" data-divspeed="3">\u23ed SKIP</button>
+      </div>
+    </div>
+  </div>`;
 }
 
 // ---------- event match screens ----------
@@ -2108,7 +2494,7 @@ function mlEventFinish(mgr, r, probs) {
   if (res === "W" && drng() < 0.35) { M.trainers.silver++; drop = ML_TRAINERS.silver.label; }
   for (const p of M.squad) if (M.xi.includes(p.id)) p.fit = Math.max(0, p.fit - 15);
   M.evDone = mlEvKey();
-  M.budget = Math.round((M.budget + prize) * 10) / 10;
+  mlEco(prize * E.ECON.gateMult((M.infra && M.infra.stadium) || 0), 0, "Event winnings");
   mlNews(`\ud83c\udfae EVENT ${res === "W" ? "WIN" : res === "D" ? "DRAW" : "LOSS"} ${r.gH}-${r.gA} vs ${mgr.tag}. +${fmtM(prize)}${drop ? " + " + drop : ""}.`);
   mlSave();
   render(() => `<div class="screen">${mlTopbar()}
@@ -2221,9 +2607,9 @@ function mlSeasonEnd() {
     .sort((a, b) => b.s - a.s).findIndex(x => x.i === M.clubIdx) + 1;
   const seasonClubIdx = M.clubIdx; // every award/qualification below reads THIS club, not next season's re-brand
   const prize = [8, 6, 4.5, 3.5, 3, 2.5, 2, 1.5, 1.2, 1][pos - 1] || 1;
-  M.budget = Math.round((M.budget + prize) * 10) / 10;
+  mlEco(prize * E.ECON.gateMult((M.infra && M.infra.stadium) || 0), 0, "Season prize");
   const lcAward = (pos <= 3 ? 5 : 0) + (pos === 1 ? 5 : 0) + (M.cup.done ? 10 : 0);
-  if (lcAward) { M.lc = (M.lc || 0) + lcAward; mlNews("\ud83e\ude99 Season LC awards: +" + lcAward + " LC."); }
+  if (lcAward) { mlEco(0, lcAward, "Season awards"); mlNews("\ud83e\ude99 Season LC awards: +" + lcAward + " LC."); }
   const sacked = pos > strRank + 3;
   const promoted = M.tier === 0 && pos <= 2;
   const relegated = M.tier === 1 && pos >= 8;
@@ -2254,11 +2640,12 @@ function mlSeasonEnd() {
     M.xi = (M.xi || []).filter(id => id !== p.id);
     M.bench = (M.bench || []).filter(id => id !== p.id);
     const payout = Math.max(0.2, Math.round(p.value * 0.25 * 10) / 10);
-    M.budget = Math.round((M.budget + payout) * 10) / 10;
+    mlEco(payout, 0, "Retirement payouts");
     const rng = E.mulberry32(E.hashSeed(M.seed + ":regen:" + M.season + ":" + p.id));
-    const kid = mlGenPlayer(rng, M.region, p.pos, 52 + Math.floor(rng() * 10));
+    const acLvl = mlInfraLvl("academy"); // #12 Academy: better kids, higher ceilings
+    const kid = mlGenPlayer(rng, M.region, p.pos, 52 + acLvl + Math.floor(rng() * 10));
     kid.age = 17 + Math.floor(rng() * 3);
-    kid.pot = Math.max(kid.pot, Math.min(92, p.ovr - 2 + Math.floor(rng() * 7)));
+    kid.pot = Math.max(kid.pot, Math.min(96, p.ovr - 2 + Math.floor(rng() * 7) + 2 * acLvl));
     M.squad.push(kid);
     mlNews("\ud83d\udc4b " + p.name + " retires at " + p.age + " (" + (p.card ? p.card + ", " : "") + "OVR " + p.ovr + "). Farewell payout +" + fmtM(payout) + ". Academy youth " + kid.name + " (" + kid.age + ", pot " + kid.pot + ") steps up.");
   }
@@ -2268,7 +2655,7 @@ function mlSeasonEnd() {
   let txt = "Season " + M.season + " done: #" + pos + ". Prize " + fmtM(prize) + ".";
   if (sacked) {
     M.pressure = (M.pressure || 0) + 1;
-    M.budget = Math.round(M.budget * 0.85 * 10) / 10;
+    mlEco(-M.budget * 0.15, 0, "Football levy (sacking)");
     txt += " \u26a0\ufe0f Board unhappy (#" + pos + " with the #" + strRank + " squad) \u2014 budget cut 15%. Pressure: " + M.pressure + "/3.";
     if (M.pressure >= 3) txt += " One more bad season and senior players will start leaving.";
   } else if (M.pressure) { M.pressure = 0; txt += " Board satisfied \u2014 pressure reset."; }
@@ -2320,7 +2707,7 @@ function mlSeasonEnd() {
     if (qualified) {
       const entrants = (M.tier === 1) ? q.cl.concat([{ league: M.leagueIdx, club: M.clubIdx }]) : q.cl;
       M.ct = E.ctMake(entrants.slice(0, 16), { league: M.leagueIdx, club: M.clubIdx }, M.seed + ":ct:s" + (M.season + 1));
-      M.lc = (M.lc || 0) + 5;
+      mlEco(0, 5, "Skill pack milestones");
       txt += " \ud83c\udfc6 QUALIFIED for the Champions Trophy! (+5 LC)";
     } else {
       M.ct = null;
@@ -2343,8 +2730,8 @@ function mlSeasonEnd() {
 
 // ---------- entry ----------
 function mlApplyGift(g) {
-  if (g.mlgp) M.budget = Math.round((M.budget + g.mlgp) * 10) / 10;
-  if (g.mllc) M.lc = (M.lc || 0) + g.mllc;
+  if (g.mlgp) mlEco(g.mlgp, 0, "Gifts & rewards");
+  if (g.mllc) mlEco(0, g.mllc, "Gifts & rewards");
   if (g.pl) {
     const rng = E.mulberry32(E.hashSeed("gift:" + (g.id || g.pl.name || Math.random())));
     const p = mlGenPlayer(rng, M.region, g.pl.pos || "FW", Math.min(94, g.pl.ovr || 84));

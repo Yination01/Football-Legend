@@ -121,3 +121,33 @@ Hard-won knowledge from development. Check this before repeating an approach.
   CB/LB/RB, attackers+mids in) rather than a snapshot - do not put the hardcoded list back.
 - **Recovery:** these edits are committed, so `git checkout HEAD -- game/<file>.js` restores a known
   good state; the wave-1 patchers (`/home/user/patch_v16_*.py`) must NOT be re-run.
+
+## v1.6 Wave 3 notes (economy, infrastructure, dossier, divisions)
+
+- **One currency path, by law.** `mlEco(gp, lc, label)` is the only place `M.budget` / `M.lc` are
+  written; `M.ledger` rows must sum to the actual delta, and `test-wave3.js` drives a whole season
+  and asserts both sums. If you add income, add a label - never touch `M.budget` directly.
+- **Matchday caps** (`E.ECON.MD_TRAINER_CAP 3`, `MD_PACK_CAP 2`) reset from `M.mdReset`'s
+  `M.matchday++` path. `mlCapLeft`/`mlCapUse` are the only way to spend them.
+- **Published numbers must be generated, not typed.** Pack tiers render from `E.ECON.PACKS`, OVR
+  bands from `E.ECON.packOvrRange`, gate scaling from `E.ECON.gateMult`, infrastructure prices from
+  `E.ECON.infraCost`. The test forbids the old hand-written "TRENDING 32%" strings from returning.
+- **Ladder rules live in the engine** (`E.ECON.DIV`): `MATCHES 10`, `PROMOTE_WINS 7`,
+  `RELEGATE_LOSSES 7`, `aiStr(div) = 72 + (10-div)*1.8`, `next(div,w,l)`. A won phase is
+  `w >= 7` **even at D1**, where there is nowhere left to climb - the D1 title is a trophy, not a
+  promotion.
+- **Divisions never touch the league calendar.** The ladder is its own fixture generator
+  (`M.div`), so `M.matchday`, `M.results` and the table are untouched; the test asserts that.
+- **Home/away comes from the fixture object** (`me.home`), never inferred from relative strength -
+  that bug made the displayed scoreline disagree with the engine's own `gH/gA`.
+- **`mlGenPlayer` takes position *buckets*** (`GK/DF/MF/FW` -> `ML_BUCKET_POS`), not precise roles.
+  Passing `"CB"`/`"LWF"` throws. The loan XI uses buckets.
+- **Dossier honesty:** AI clubs are modelled by squad strength only, so star players and honours for
+  them are labelled "not tracked" - nothing is invented. Scouting depth = `mlInfraScout()` (Staff
+  level): 1 style, 2 manager + form, 3 budget band + head-to-head, 4 star names, 5 honours.
+- **Overlay hosts:** `ML_DOSSIER_HOSTS` maps a host name to its render function and
+  `mlDossierWire()` is called from each host's `setTimeout` - add a host by registering it there,
+  not by duplicating the modal.
+- **Patchers are single-use.** `patch_v3_*.py` were applied once; re-running duplicates `const ECON`
+  and breaks the file. Recovery is `git checkout HEAD -- game/<file>.js` + a fresh edit.
+

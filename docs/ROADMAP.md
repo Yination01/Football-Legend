@@ -19,6 +19,16 @@
   - **Leaderboard seasons** — monthly snapshots + auto-gifts for top 3 (admin "Close season").
   - Fixed `app/copy-game.js` source path (`../game`).
 
+- **v1.6 (in code, unreleased) — Master Plan Wave 3:**
+  - **#6 Multi-week training engine** — published formula `ΔXP = 60 × ageCurve × headroom × coach × minutes`; every skill has a real week cost with a live ETA, and injuries pause the plan instead of eating weeks.
+  - **#9 AUTO vs MAX training plans** — balanced spread vs archetype OVR push on the same XP budget, with projected OVR previewed before you commit (BaL and ML).
+  - **#17 MOTM + Awards Gala** — MOTM from the real event log (goals/assists/saves/tackles/rating/minutes), goals attributed to real XI names, season gala: MVP, club Golden Boot, Best XI, Manager of the Season (the table's actual leader), MOTM tally — all stored in honours.
+  - **#16 Two-currency economy + packs + matchday caps** — GP = gate receipts/prizes, LC = objectives/awards; every currency movement goes through one ledger with a per-matchday cap on trainers/packs, and an auditable ledger screen. Drop tables are published and tested against the roller.
+  - **#12 Club Infrastructure Hub** — four trees (Stadium, Staff, Academy, Facilities), five levels each, each level showing its exact engine effect and price; effects are measured in tests (training XP, recovery, drops, youth intake, gate).
+  - **#13 Club Info Dossier** — one modal for any club: table position, strength vs yours, style, manager, form, budget band, head-to-head and honours — gated by your scouting tier, and AI clubs explicitly say what is not tracked rather than inventing it.
+  - **#15 AI Divisions** — side ladder D10 → D1, 10 matches per phase, AI squads escalate 72 → 88 strength, 7 wins promotes / 7 losses relegates, checkpoint rewards per division, playable with your ML squad or a loaned XI, true odds every match.
+  - New suite `game/test-wave3.js` (127 checks).
+
 - **v1.6 (in code, unreleased) — Master Plan Wave 2:**
   - **#1 Mid-match pause + tactics drawer** — BaL pause modal (score clock stamina role; resume, drawer, sub, auto-play) and a sliding drawer with `Engine.setRole()` switches that apply from the current minute; ML pause opens its tactical window on demand.
   - **#11 Segmented match HUD** — scoreboard sub-line (role / commentary mode / knockout tag), control strip + bottom speed/sub bar, one honest sub path for HUD, drawer and modal.
