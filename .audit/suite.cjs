@@ -163,6 +163,37 @@ runStep('v1.6 Wave 3: Training Math, AUTO/MAX Planner, MOTM + Awards Gala (test-
   return parseInt(m[1], 10);
 });
 
+runStep('Workflow run blocks are valid bash (a broken step must never reach a build)', () => {
+  const { execFileSync } = require('child_process');
+  const dir = path.join(ROOT, '.github/workflows');
+  let checked = 0;
+  for (const wf of fs.readdirSync(dir).filter(f => /\.ya?ml$/.test(f))) {
+    const lines = fs.readFileSync(path.join(dir, wf), 'utf8').split('\n');
+    const blocks = [];
+    let cur = null, indent = null;
+    for (const line of lines) { // collect whole blocks first - a partial block is always unterminated
+      if (/^\s*run: \|/.test(line)) { cur = []; indent = null; blocks.push(cur); continue; }
+      if (cur === null) continue;
+      if (line.trim() === '') { if (indent !== null) cur.push(''); continue; }
+      const lead = line.length - line.trimStart().length;
+      if (indent === null) indent = lead;
+      if (lead < indent) { cur = null; continue; }
+      cur.push(line.slice(indent));
+    }
+    for (const b of blocks) {
+      checked++;
+      if (!b.length) continue;
+      try {
+        execFileSync('bash', ['-n'], { input: b.join('\n') });
+      } catch (e) {
+        throw new Error(`${wf}: a run block is not valid bash ("${b[0].trim()}"): ${(e.stderr || '').toString().trim()}`);
+      }
+    }
+  }
+  if (!checked) throw new Error('no workflow run blocks found');
+  return checked;
+});
+
 runStep('v1.6 Wave 4: Supabase RLS Fix + Auto-Sync on Match Finish (test-wave4.js)', () => {
   const out = execSync('node test-wave4.js', { cwd: path.join(ROOT, 'game'), encoding: 'utf8' });
   const m = out.match(/(\d+)\s+passed,\s+(\d+)\s+failed/);

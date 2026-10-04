@@ -154,7 +154,7 @@ jobs:
             echo "::error::APK is not signed with the repo's stable keystore - it would NOT install over the previous build."
             exit 1
           fi
-          echo "Signature matches the repo keystore: this APK installs over the previous preview.""
+          echo "Signature matches the repo keystore: this APK installs over the previous preview."
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v7
