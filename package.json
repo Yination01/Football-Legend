@@ -22,6 +22,7 @@
     "apk": "powershell -ExecutionPolicy Bypass -File scripts/build-apk.ps1",
     "apk:local": "powershell -ExecutionPolicy Bypass -File scripts/build-apk.ps1 -Where local",
     "apk:bash": "./scripts/build-apk.sh",
-    "build:release": "./scripts/build-release.sh"
+    "build:release": "./scripts/build-release.sh",
+    "test:v16": "node game/test-v16.js"
   }
 }

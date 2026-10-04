@@ -19,6 +19,14 @@
   - **Leaderboard seasons** — monthly snapshots + auto-gifts for top 3 (admin "Close season").
   - Fixed `app/copy-game.js` source path (`../game`).
 
+- **v1.6 (in code, unreleased) — Master Plan Wave 1:**
+  - **#8 PES 5-direction form arrows** (⬆ ↗ ➡ ↘ ⬇) with seeded, deterministic drift; each arrow step is a real 1.5 OVR in `effOvr`.
+  - **#7 Tactical counter system** surfaced as a full 4x4 matrix on the Tactics screen — identical to the +1.0/0/-1.0 baked into the shown odds.
+  - **#10 Season-2 transition fixed** — tier-aware galaxy binding (my league *is* the galaxy league; promoted clubs vacate their slot), Super-League top-4 continental route, and a full end-of-season pipeline with a Season Review panel (awards, settle, rollover).
+  - **#14 Auto-refresh bug fixed** — native storage race removed (restores hydrate in place, no page reboot) and reloads can never fire mid-match.
+  - New suite `game/test-v16.js` (54 checks) + `scripts/sync-assets.js` (plain/cache-busted twins stay identical).
+  - Full 18-item spec: `docs/MASTER-PLAN-v1.6.md` (Waves 2-4 queued: match-day UX, defender matrix, career/economy, cloud).
+
 ## To launch (owner actions — see store/LAUNCH-CHECKLIST.md + docs/V14-RELEASE-CHECKLIST.md)
 
 - [ ] Supabase: run `game/supabase/leaderboard.sql` (includes ghosts + seasons).

@@ -90,7 +90,8 @@ runStep('Every JS source file compiles cleanly', () => {
     'game/cloud.js',
     'game/vendor-supabase.js',
     'game/admin/admin.js',
-    'app/copy-game.js'
+    'app/copy-game.js',
+    'game/test-v16.js'
   ];
   for (const rel of files) {
     const abs = path.join(ROOT, rel);
@@ -142,6 +143,13 @@ runStep('Ghost PvP, Cloud Saves & v1.5 Features (test-v15.js)', () => {
   const out = execSync('node test-v15.js', { cwd: path.join(ROOT, 'game'), encoding: 'utf8' });
   const m = out.match(/(\d+)\s+passed,\s+(\d+)\s+failed/);
   if (!m || parseInt(m[2], 10) > 0) throw new Error(`v15 tests failed: ${out}`);
+  return parseInt(m[1], 10);
+});
+
+runStep('v1.6: Form Arrows, Counters, S2 Rollover, Safe Reload (test-v16.js)', () => {
+  const out = execSync('node test-v16.js', { cwd: path.join(ROOT, 'game'), encoding: 'utf8' });
+  const m = out.match(/(\d+)\s+passed,\s+(\d+)\s+failed/);
+  if (!m || parseInt(m[2], 10) > 0) throw new Error(`v16 tests failed: ${out}`);
   return parseInt(m[1], 10);
 });
 
