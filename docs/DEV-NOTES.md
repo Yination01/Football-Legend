@@ -114,6 +114,10 @@ Hard-won knowledge from development. Check this before repeating an approach.
 - **The defensive matrix is not defenders-only:** the gate is `posInfo.defBias > 0`, so midfielders
   inherit it — measured duel decisions per match: CB 1.09, DMF 0.78, RB 0.66, LB 0.59, CMF 0.47,
   AMF 0.13, wingers 0.07-0.09; SS/CF are hard-zero (defBias 0) and GK uses its own `gk`/`gkpen`
-  branch. Midfield roles bend the matrix through `risk` (fouls), not `tackleFreq` (df_-only).
+  branch. Midfielders since v1.6 W2 also carry real defensive profiles - `mf_screen` (x0.8 duels,
+  +10pp duel win, low stamina) and `mf_press` (x1.4 duels, more fouls), mirroring `df_hold`/`df_step`
+  - and DMF joined the set-piece taker list (`["CF","SS","AMF","LWF","RWF","CMF","DMF"]`; GK and the
+  back line still never take them). `test-position-skills.js` asserts the taker RULE (no GK, no
+  CB/LB/RB, attackers+mids in) rather than a snapshot - do not put the hardcoded list back.
 - **Recovery:** these edits are committed, so `git checkout HEAD -- game/<file>.js` restores a known
   good state; the wave-1 patchers (`/home/user/patch_v16_*.py`) must NOT be re-run.

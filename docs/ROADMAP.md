@@ -26,7 +26,8 @@
   - **#3 Extra time + interactive shootouts** — knockout ties play 120' (`ko: true`), then an honest `Engine.penaltyShootout()` whose exact kick list drives the UI, the summary and the rewards. All six former coin-flip tie-breaks removed (incl. AI-vs-AI CT ties).
   - **#4 Key Highlights mode** — in-play replays skipped and stored as deterministic cuts, replayed in a post-match 2D reel; "Full Commentary" replays every shot live (`longCommentary` setting).
   - **#5 Defender decision matrix** — tackle / jockey / step up / drop off across five scenarios, shown % == rolled % (measured over ~2.9k duels in `test-wave2.js`).
-  - New suite `game/test-wave2.js` (75 checks incl. DOM-hook integrity for both match screens).
+  - **#5 extension** - DMF/CMF defensive role profiles (Sit & Screen / Press & Win) plus DMF on the set-piece taker list; GK and the back line still never take them. Keeper penalty odds corrected to an exact mirror of the engine (they were ~9pp pessimistic).
+  - New suite `game/test-wave2.js` (95 checks incl. DOM-hook integrity and per-position decision coverage for both match screens).
 
 - **v1.6 (in code, unreleased) — Master Plan Wave 1:**
   - **#8 PES 5-direction form arrows** (⬆ ↗ ➡ ↘ ⬇) with seeded, deterministic drift; each arrow step is a real 1.5 OVR in `effOvr`.

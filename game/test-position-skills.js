@@ -57,8 +57,14 @@ check("CB roles are df_*", Object.keys(E.rolesFor("CB")).every(id => id.startsWi
 
 // Free-kick taker list is outfield attackers/mids only (engine hardcode)
 const eng = fs.readFileSync(__dirname + "/engine.js", "utf8");
-check("FK takers exclude GK", /playerTakes[\s\S]*?\["CF","SS","AMF","LWF","RWF","CMF"\]/.test(eng.replace(/\s/g, " ")) ||
-  eng.includes('["CF","SS","AMF","LWF","RWF","CMF"]'));
+// (v1.6 W2 added DMF to the taker list, so assert the RULE - who is in, who must never be - not a snapshot)
+const takerSeg = (eng.match(/playerTakes[\s\S]{0,300}?;/) || [""])[0];   // anchor on the engine expression, not any ["CF","SS"] array
+const takerList = (takerSeg.match(/\[[^\]]*\]/) || [""])[0];
+const takerIds = (takerList.match(/"([A-Z]{2,3})"/g) || []).map(p => p.replace(/"/g, ""));
+check("FK takers exclude GK", takerIds.length > 0 && !takerIds.includes("GK"));
+check("FK takers exclude the back line", !takerIds.some(p => p === "CB" || p === "LB" || p === "RB"));
+check("FK takers cover attackers, wingers and midfield",
+  ["CF", "SS", "AMF", "LWF", "RWF", "CMF", "DMF"].every(p => takerIds.includes(p)));
 
 // Match: GK with illegal skills must not get FK curler bonus in odds
 const gkPlayer = {

@@ -20,8 +20,8 @@ spec.
 6. **Save migrations**: every new save field ships with a default-on-load migration in
    `ML.enter()` / `flBootScreen()` paths so existing careers never break.
 
-**Test gate today:** `npm run test:all` → **743 checks green** (config, syntax 9, fairness 21,
-ML 364-368, ML-CT 27, BaL-CT 25, skills 100, v15 55, v1.6 suite 54, **wave-2 suite 75**).
+**Test gate today:** `npm run test:all` → **766 checks green** (config, syntax 9, fairness 21,
+ML 364-368, ML-CT 27, BaL-CT 25, skills 102, v15 55, v1.6 suite 54, **wave-2 suite 95**).
 
 ---
 
@@ -172,6 +172,13 @@ read the *next* season's club index.
 - **#5 Defender matrix** — four options (tackle / jockey / step up / drop off) across five
   scenarios; `defChoiceOdds()` is the single source for both the shown % and the roll, with
   `decisionOdds().def` as the exact mirror (fairness-tested at ≈ 2900 measured duels, ±5pp).
+- **#5 extension (owner request)** — midfielders now have a defensive identity of their own:
+  `Sit & Screen` (x0.8 duels, +10pp duel win, low stamina cost) and `Press & Win` (x1.4 duels, more
+  fouls, can spring a counter) exist for DMF/CMF, mirroring the `df_hold`/`df_step` numbers; DMF also
+  joined the set-piece taker list so a holding mid can take free kicks and penalties. Strikers keep
+  the classic four roles, and GK/CB/LB/RB still never take set pieces. Keeper odds were audited at
+  the same time: the open-play branch was already exact, the penalty branch was approximated and is
+  now an exact mirror of `resolveGKPen` (28% shown vs 37% real → 37.0% shown vs 37.1% measured).
 - **#11 HUD** — scoreboard sub-line (role · mode · knockout tag), a three-button control strip
   (TACTICS / mode / PAUSE), a bottom speed+sub bar, and a sliding drawer that never stops the clock.
 

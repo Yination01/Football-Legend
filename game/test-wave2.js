@@ -125,6 +125,55 @@ check('#5 scenarios cover 1v1 / through ball / cross / counter / set piece',
     E.defChoiceOdds('tackle', E.DEF_SCENARIOS[0], Object.assign(E.baseStats('CMF'), { DEF: 60, PHY: 65, PAC: 62 }), E.ROLES.discipline, [], 100).foul);
 }
 
+/* ---- #5 midfield profiles: DMF/CMF get a defensive identity; strikers keep their own ---- */
+{
+  const dmf = Object.keys(E.rolesFor('DMF')), cmf = Object.keys(E.rolesFor('CMF'));
+  const amf = Object.keys(E.rolesFor('AMF')), cf = Object.keys(E.rolesFor('CF'));
+  check('#5 DMF gets real defensive profiles (' + dmf.join(', ') + ')',
+    dmf.includes('mf_screen') && dmf.includes('mf_press') && !dmf.includes('runs'));
+  check('#5 CMF gets them too and keeps its full attacking set', cmf.includes('mf_screen') && cmf.includes('mf_press') && cmf.includes('runs') && cmf.includes('balanced'));
+  check('#5 attacking positions are untouched (strikers keep the classic four)', cf.length === 4 && amf.length === 4 && !cf.some(id => id.indexOf('mf_') === 0) && !amf.some(id => id.indexOf('mf_') === 0));
+  check('#5 every option offered is a real role with label + description',
+    [dmf, cmf].every(list => list.every(id => E.ROLES[id] && E.ROLES[id].label && E.ROLES[id].desc)));
+
+  const eff = Object.assign(E.baseStats('DMF'), { DEF: 68, PHY: 70, PAC: 64 });
+  const scen = E.DEF_SCENARIOS[0];
+  const bal = E.defChoiceOdds('tackle', scen, eff, E.ROLES.balanced, [], 100);
+  const screen = E.defChoiceOdds('tackle', scen, eff, E.ROLES.mf_screen, [], 100);
+  const press = E.defChoiceOdds('tackle', scen, eff, E.ROLES.mf_press, [], 100);
+  check('#5 "Sit & Screen" wins the duels it takes and fouls less; "Press & Win" fouls more',
+    screen.win > bal.win && screen.foul < bal.foul && E.ROLES.mf_press.tackleFreq > E.ROLES.mf_screen.tackleFreq && press.foul > screen.foul);
+
+  function playRole(pos, roleId, N) {
+    let duels = 0, setpieces = 0, stam = 0;
+    for (let i = 0; i < N; i++) {
+      const m = E.createMatch(E.STARTER_CLUBS[0], E.STARTER_CLUBS[4], { seed: 5100000 + i * 17, playerTeam: 0, role: roleId,
+        player: { pos, playstyle: pos === 'GK' ? 'shotstopper' : 'destroyer', eff: E.baseStats(pos) } });
+      let done = false;
+      while (!done) {
+        const s2 = m.step();
+        if (s2.decision) {
+          if (s2.decision.type === 'def') duels++;
+          if (s2.decision.type === 'penalty' || s2.decision.type === 'freekick') setpieces++;
+          m.decide(s2.decision.type === 'def' ? 'tackle' : 'auto');
+        }
+        done = s2.done || m.state.done;
+      }
+      stam += m.result().staminaEnd;
+    }
+    return { duels: duels / N, setpieces, stam: stam / N };
+  }
+  const scr = playRole('DMF', 'mf_screen', 400), prs = playRole('DMF', 'mf_press', 400);
+  const cb = playRole('CB', 'df_hold', 300), gk = playRole('GK', 'gk_line', 300);
+  check('#5 Press & Win really presses: ' + prs.duels.toFixed(2) + ' duels/match vs ' + scr.duels.toFixed(2) + ' on Sit & Screen',
+    prs.duels > scr.duels * 1.3 && scr.duels > 0.1);
+  check('#5 and the pressing role really costs more stamina (' + prs.stam.toFixed(1) + '% vs ' + scr.stam.toFixed(1) + '% left)',
+    prs.stam < scr.stam);
+  check('#5 holding midfielders now take set pieces (' + scr.setpieces + ' free kicks/penalties in 400 matches)', scr.setpieces > 0);
+  check('#5 centre backs and keepers still never take them (CB ' + cb.setpieces + ', GK ' + gk.setpieces + ' in 300 each)',
+    cb.setpieces === 0 && gk.setpieces === 0);
+}
+
 /* ---- keeper branch honesty: open play (stay/rush) and penalties are shown at the TRUE probability ---- */
 {
   const eff = { PAC: 50, SHO: 30, PAS: 55, DRI: 40, DEF: 72, PHY: 60 };

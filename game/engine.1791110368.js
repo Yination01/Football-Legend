@@ -206,11 +206,16 @@ const ROLES = {
   // defenders
   df_hold:    { label: "Hold The Line",    desc: "Position first: fewer duels, +10% duel win rate.",         involve: 0.85, risk: 0.7,  tackleFreq: 0.85, tackleAdj: 0.10 },
   df_step:    { label: "Step Out & Press", desc: "Hunt the ball: ~40% more duels, slightly riskier.",        involve: 1.1,  risk: 1.15, tackleFreq: 1.4,  tackleAdj: -0.03 },
-  df_sweep:   { label: "No-Nonsense",      desc: "Clear danger early. Solid, safe, reliable.",               involve: 0.9,  risk: 0.85, tackleFreq: 1.1,  tackleAdj: 0.04 }
+  df_sweep:   { label: "No-Nonsense",      desc: "Clear danger early. Solid, safe, reliable.",               involve: 0.9,  risk: 0.85, tackleFreq: 1.1,  tackleAdj: 0.04 },
+  // midfielders (#5 extension): a real defensive identity, mirroring the df_ profiles
+  mf_screen:  { label: "Sit & Screen",     desc: "Guard the space in front of the back four: fewer duels, but you win the ones you take. Low stamina cost.", involve: 0.85, risk: 0.8, tackleFreq: 0.8, tackleAdj: 0.10 },
+  mf_press:   { label: "Press & Win",      desc: "Hunt the ball: ~40% more duels and fouls, and stepping in can spring a counter.",                          involve: 1.15, risk: 1.2, tackleFreq: 1.4, tackleAdj: -0.02 }
 };
 function rolesFor(pos) {
   const ids = pos === "GK" ? ["gk_line", "gk_sweeper", "gk_calm"]
     : (pos === "CB" || pos === "LB" || pos === "RB") ? ["df_hold", "df_step", "df_sweep"]
+    : pos === "DMF" ? ["mf_screen", "mf_press", "balanced", "aggressive", "discipline"]      // #5: holders defend first
+    : pos === "CMF" ? ["mf_screen", "mf_press", "balanced", "aggressive", "runs", "discipline"] // #5: box-to-box keeps everything
     : ["balanced", "aggressive", "runs", "discipline"];
   const out = {};
   for (const id of ids) out[id] = ROLES[id];
@@ -574,7 +579,7 @@ function createMatch(home, away, opts) {
       const isPen = rng() < 0.18; // handball / foul in the box
       const playerTakes = P && !st.playerOut && !posInfo.gk &&
         ((isHome && pTeam === 0) || (!isHome && pTeam === 1)) &&
-        ["CF","SS","AMF","LWF","RWF","CMF"].includes(P.pos);
+        ["CF","SS","AMF","LWF","RWF","CMF","DMF"].includes(P.pos); // #5: holding midfielders take them too
       const gkFaces = P && !st.playerOut && posInfo.gk && isPen &&
         ((isHome && pTeam === 1) || (!isHome && pTeam === 0));
       if (playerTakes) {
