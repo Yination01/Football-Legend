@@ -2614,7 +2614,8 @@ function matchScreen(fx, displayedProbs) {
       <span class="clock" id="clock">0'</span>
       <span class="tm" style="color:${A.col1 === "#000000" ? "#fff" : A.col1}">${A.short}</span>
     
-      <div class="hudline"><span id="hudrole">role</span> · <span id="hudmode">key highlights</span>${isKO ? ' · <b style="color:var(--gold)">KNOCKOUT</b> — extra time, then penalties if level' : ""}</div></div>
+      <div class="hudline"><span id="hudrole">${(E.rolesFor(S.pos)[S.role] || { label: S.role }).label}</span> · <span id="hudmode">${hlMode === "full" ? "Full commentary" : "Key highlights"}</span>${isKO ? ' · <b style="color:var(--gold)">KNOCKOUT</b> — extra time, then penalties if level' : ""}</div>
+    </div>
     <div class="hudctl">
       <button class="hudbtn" id="tacbtn">🎯 TACTICS</button>
       <button class="hudbtn" id="modebtn">⏩ Key Highlights</button>
