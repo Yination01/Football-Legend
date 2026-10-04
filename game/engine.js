@@ -193,6 +193,173 @@ function stylesFor(pos) {
 }
 
 // ---------- Match roles (per-match game plan) ----------
+/* ============================================================
+   v1.6 #17: MAN OF THE MATCH & SCORER ATTRIBUTION
+   ------------------------------------------------------------
+   MOTM is computed from the REAL match log only (goals, assists, saves, tackles, key passes,
+   rating, minutes). Nothing is invented and nothing is re-rolled: the same stat line always
+   produces the same score, and ties break by rating, then minutes, then id.
+   ============================================================ */
+function motmScore(stat, opts) {
+  const s = stat || {}, o = opts || {};
+  const win = o.result === "W" ? 0.5 : o.result === "D" ? 0.1 : -0.2;
+  const mf = 0.6 + 0.4 * Math.min(1, (s.minutes != null ? s.minutes : 90) / 90);
+  const raw = (s.goals || 0) * 1.10 + (s.assists || 0) * 0.70 + (s.saves || 0) * 0.28 +
+              (s.tackles || 0) * 0.18 + (s.keyPasses || 0) * 0.12 + (s.shots || 0) * 0.04 +
+              ((s.rating != null ? s.rating : 6) - 6) * 0.90 + (s.cleanSheet ? 0.30 : 0);
+  return Math.round((raw * mf + win) * 100) / 100;
+}
+function motmThreshold() { return 1.6; } // a genuinely match-winning contribution, not a participation prize
+function pickMOTM(list) { // deterministic: score desc, rating desc, minutes desc, id asc
+  const arr = (list || []).slice().sort((a, b) =>
+    (b.score - a.score) || ((b.rating || 0) - (a.rating || 0)) || ((b.minutes || 0) - (a.minutes || 0)) ||
+    String(a.id).localeCompare(String(b.id)));
+  return arr.length ? arr[0] : null;
+}
+// Deterministic scorer attribution for clubs whose squads we DO track (your ML XI / BaL club).
+// The goals are already real (they came out of the engine); this only puts a name on them,
+// weighted by the player's real shootBias so a centre forward scores more than a centre back.
+function attributeGoals(players, goals, seedKey) {
+  const out = [];
+  const pool = (players || []).filter(p => p);
+  if (!pool.length || !(goals > 0)) return out;
+  const rng = mulberry32(hashSeed(String(seedKey) + ":scorers"));
+  const w = pool.map(p => {
+    const pos = POSITIONS[p.pos] || POSITIONS.CMF;
+    return { p, w: 0.25 + (pos.shootBias || 0) * 1.5 + (pos.assistBias || 0) * 0.4 };
+  });
+  for (let g = 0; g < goals; g++) {
+    const total = w.reduce((t, x) => t + x.w, 0);
+    let r = rng() * total, scorer = w[0].p;
+    for (const x of w) { r -= x.w; if (r <= 0) { scorer = x.p; break; } }
+    // assist: a different player from the same pool, also weighted
+    let assist = null;
+    if (pool.length > 1 && rng() < 0.72) {
+      const others = w.filter(x => x.p !== scorer);
+      const tot2 = others.reduce((t, x) => t + x.w, 0);
+      let r2 = rng() * tot2;
+      for (const x of others) { r2 -= x.w; if (r2 <= 0) { assist = x.p; break; } }
+      if (!assist) assist = others[others.length - 1].p;
+    }
+    out.push({ scorer: scorer.id, assist: assist ? assist.id : null });
+  }
+  return out;
+}
+// Season contribution score used by the awards gala (same weights as MOTM, minus the per-match result)
+function seasonScore(p) {
+  const s = p || {};
+  return Math.round((((s.goals || 0) * 1.10 + (s.assists || 0) * 0.70 + (s.motm || 0) * 0.9 +
+          (s.apps || 0) * 0.08 + ((s.ovr || 0) - 60) * 0.05) * 100)) / 100;
+}
+
+/* ============================================================
+   v1.6 #6: TRAINING & GROWTH MATH  (published formula, unit-tested)
+   ------------------------------------------------------------
+   deltaXP = drillXP x ageCurve(age) x headroom(pot - stat) x coachMul(coachLvl) x minutesFactor(min)
+   Skill plans use the same curve with a flat 1.0 headroom: a week of training is worth
+   `weeklyXP` points, and every skill costs a fixed number of training points (weeks) that is
+   derived from its real effect size in SKILLS (see SKILL_WEEKS below) - nothing invented.
+   ============================================================ */
+const TRAIN = {
+  XP_PER_WEEK: 60,                       // one clean week (prime age, full 90', no coach) = 1.00 week of progress
+  ageCurve(age) {                        // peaks 18-23, holds to 29, decays 30+
+    if (!(age > 0)) return 1;
+    if (age <= 16) return 0.9;
+    if (age <= 23) return 1 + (23 - age) * 0.04;
+    if (age <= 29) return 1;
+    return Math.max(0.35, 1 - (age - 29) * 0.08);
+  },
+  headroom(stat, pot) {                  // taper to 0 at potential (20 points of headroom = full speed)
+    if (pot == null) pot = 99;
+    return Math.max(0, Math.min(1, (pot - (stat || 0)) / 20));
+  },
+  coachMul(coachLvl) { return 1 + 0.12 * Math.max(0, coachLvl || 0); },   // #12 Staff tree feeds this
+  minutesFactor(minutes) { return 0.5 + 0.5 * Math.max(0, Math.min(1, (minutes || 0) / 90)); },
+  weeklyXP(ctx) {                        // ctx: { age, coachLvl, minutes }
+    const c = ctx || {};
+    return this.XP_PER_WEEK * this.ageCurve(c.age) * this.coachMul(c.coachLvl) * this.minutesFactor(c.minutes);
+  },
+  statWeeklyXP(drillXP, ctx) {           // stats: same curve, plus the headroom taper
+    const c = ctx || {};
+    return (drillXP || 0) * this.ageCurve(c.age) * this.headroom(c.stat, c.pot) * this.coachMul(c.coachLvl) * this.minutesFactor(c.minutes);
+  },
+  skillXP(skill) { const w = skillWeeks()[skill]; return (w == null ? 5 : w) * this.XP_PER_WEEK; },
+  weeksForSkill(skill, ctx) {            // live ETA, recalculated every week
+    const wk = this.weeklyXP(ctx);
+    if (wk <= 0) return Infinity;
+    return Math.ceil(this.skillXP(skill) / wk);
+  },
+  weeksRemaining(skill, xpDone, ctx) {
+    const wk = this.weeklyXP(ctx);
+    if (wk <= 0) return Infinity;
+    return Math.ceil(Math.max(0, this.skillXP(skill) - (xpDone || 0)) / wk);
+  },
+  // #9 AUTO (balanced) vs MAX (archetype push) - SAME stat-point budget, so it is a real trade-off.
+  trainPlan(pos, stats, sp, mode) {
+    const w = (POSITIONS[pos] || POSITIONS.CMF).weights;
+    const keys = Object.keys(w).sort((a, b) => (w[b] || 0) - (w[a] || 0));
+    const alloc = {}; for (const k of keys) alloc[k] = 0;
+    let left = Math.max(0, sp | 0);
+    const AUTO_CAP = 92, KEY_CAP = 92, SUPPORT_CAP = 70;
+    if (mode === "max") {
+      // fill the archetype (top-weighted) stats first; support stats only ever get crumbs, soft-capped at 70
+      const key = keys.filter(k => (w[k] || 0) >= 0.2 && (stats[k] || 0) < KEY_CAP);
+      for (const k of key) {
+        const room = Math.max(0, KEY_CAP - (stats[k] || 0));
+        const put = Math.min(left, room); alloc[k] += put; left -= put;
+        if (!left) break;
+      }
+      if (left) for (const k of keys) {
+        if ((w[k] || 0) >= 0.2) continue;
+        const room = Math.max(0, Math.min(SUPPORT_CAP, KEY_CAP) - (stats[k] || 0));
+        const put = Math.min(left, room); alloc[k] += put; left -= put;
+        if (!left) break;
+      }
+    } else {
+      // balanced: round-robin weighted by the position's own profile (order = weight order)
+      const open = keys.filter(k => (stats[k] || 0) < AUTO_CAP);
+      while (left > 0 && open.length) {
+        let placed = false;
+        for (const k of open) {
+          if (left <= 0) break;
+          if ((stats[k] || 0) + alloc[k] >= AUTO_CAP) continue;
+          alloc[k]++; left--; placed = true;
+        }
+        if (!placed) break;
+      }
+    }
+    const after = {}; for (const k of keys) after[k] = Math.min(99, (stats[k] || 0) + alloc[k]);
+    return { mode: mode === "max" ? "max" : "auto", alloc, spent: sp - left, left,
+             ovrBefore: calcOVR(stats, pos), ovrAfter: calcOVR(after, pos),
+             keyStats: keys.filter(k => (w[k] || 0) >= 0.2), supportCap: SUPPORT_CAP };
+  }
+};
+// Week cost per skill DERIVED from its real engine effect (SKILLS table): stronger effect = longer plan.
+// Lazy on purpose: SKILLS is declared later in this file and must never be read at load time.
+let _skillWeeks = null;
+function skillWeeks() {
+  if (_skillWeeks) return _skillWeeks;
+  const out = {};
+  for (const id of Object.keys(SKILLS)) {
+    const def = SKILLS[id] || {};
+    let power = 0;
+    // Additive bonuses are converted to multiplier-equivalents at the engine's nominal base rate for
+    // that roll (duel win ~0.50, stay-big save ~0.70), so a +2pp duel bump is priced like the x1.04
+    // it actually is - not like a flat x1.16.
+    const BASE = { defBump: 0.50, gkStay: 0.70 };
+    for (const k of Object.keys(def)) {
+      const v = def[k];
+      if (typeof v !== "number") continue;
+      const mag = BASE[k] ? Math.abs(v) / BASE[k] : Math.abs(v - 1);
+      if (mag > power) power = mag;
+    }
+    out[id] = Math.max(3, Math.min(12, Math.round(4 + power * 40)));
+  }
+  _skillWeeks = out;
+  return out;
+}
+const SKILL_WEEKS = new Proxy({}, { get: (t, k) => skillWeeks()[k], has: (t, k) => k in skillWeeks(), ownKeys: () => Reflect.ownKeys(skillWeeks()) });
+
 const ROLES = {
   // midfielders & forwards
   balanced:   { label: "Balanced",         desc: "Play your natural game.",             involve: 1.0,  risk: 1.0 },
@@ -1073,6 +1240,8 @@ const Engine = {
   REGION_LEAGUES, genStarterClubs,
   STARTER_CLUBS, EURO_CLUBS, SKILLS, SKILL_POS, skillsFor, skillLegal, skillsActive, skillMul,
   DEF_SCENARIOS, defChoiceOdds, shootoutKickOdds, penaltyShootout,
+  TRAIN, SKILL_WEEKS, skillWeeks,
+  motmScore, motmThreshold, pickMOTM, attributeGoals, seasonScore,
   LEAGUE_DEFS, leagueForRegion, makeGalaxy, galaxySimMD, galaxyRollover,
   ctMake, ctClub, ctGroupFixtures, ctSimGroups, ctGroupTable, ctAdvanceToKO, ctSimKORound, CT_ROUNDS, CT_GROUP_AFTER_MD
 };

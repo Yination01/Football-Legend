@@ -153,6 +153,16 @@ const ML_TRAINERS = {
 };
 function mlExpNeed(p) { return 60 + Math.max(0, p.ovr - 50) * 8; } // EXP for next OVR point
 function mlTrainerFor(ovr) { return ovr < 65 ? "bronze" : ovr < 75 ? "silver" : "gold"; }
+function mlEnsurePlayerStats() { // #17: per-player season log used by MOTM + the awards gala
+  M.motmHistory = M.motmHistory || [];
+  M.honours = M.honours || [];
+  for (const p of (M.squad || [])) {
+    if (p.apps == null) p.apps = 0;
+    if (p.goals == null) p.goals = 0;
+    if (p.assists == null) p.assists = 0;
+    if (p.motm == null) p.motm = 0;
+  }
+}
 function mlEnsureTrainers() {
   M.trainers = M.trainers || { bronze: 2, silver: 1, gold: 0 };
   const mig = E.mulberry32(E.hashSeed(M.seed + ":posmig"));
@@ -503,6 +513,15 @@ function mlHome() {
       <div class="kv"><span>Board target</span><b>${M.review.target === "met" ? "\u2705 Achieved" : "\u26a0\ufe0f Missed"} <span class="sub">(squad rank #${M.review.strRank})</span></b></div>
       <div class="kv"><span>Settlement</span><b>+${fmtM(M.review.prize)}${M.review.lc ? " \u00b7 +" + M.review.lc + " LC" : ""}</b></div>
       ${M.review.improved ? `<div class="kv"><span>\ud83c\udf1f Most improved</span><b>${M.review.improved.name} +${M.review.improved.up} OVR \u2192 ${M.review.improved.ovr}</b></div>` : ""}
+      ${M.review.gala ? `<div class="panel" style="margin:8px 0 0;border-color:rgba(255,215,110,.35)">
+        <h2>\ud83c\udfc5 Awards Gala \u00b7 Season ${M.review.season}</h2>
+        ${M.review.gala.mvp ? `<div class="kv"><span>\ud83e\uddc1 Player of the Season</span><b>${M.review.gala.mvp.name} <span class="sub">${M.review.gala.mvp.pos} \u00b7 OVR ${M.review.gala.mvp.ovr} \u00b7 ${M.review.gala.mvp.goals}G ${M.review.gala.mvp.assists}A \u00b7 score ${M.review.gala.mvp.score}</span></b></div>` : ""}
+        ${M.review.gala.boot ? `<div class="kv"><span>\ud83d\udc5f Club Golden Boot</span><b>${M.review.gala.boot.name} \u00b7 ${M.review.gala.boot.goals} goals <span class="sub">${M.review.gala.boot.assists} assists</span></b></div>` : ""}
+        ${M.review.gala.manager ? `<div class="kv"><span>\ud83c\udf96 Manager of the Season</span><b>${M.review.gala.manager.club} <span class="sub">${M.review.gala.manager.points} pts${M.review.gala.manager.mine ? " \u2014 that's you!" : ""}</span></b></div>` : ""}
+        <div class="kv"><span>\ud83c\udf1f Man of the Match awards</span><b>${M.review.gala.motm}${M.review.gala.topMotm ? ` <span class="sub">best: ${M.review.gala.topMotm.name} (${M.review.topMotm ? "" : ""}${M.review.gala.topMotm.score.toFixed(2)})</span>` : ""}</b></div>
+        <p class="sub" style="margin:6px 0 2px"><b>Best XI</b> (tracked contributions + OVR):</p>
+        <p class="sub">${M.review.gala.bestXI.map(p => `${p.pos} ${p.name} (${p.ovr})`).join(" \u00b7 ")}</p>
+      </div>` : ""}
       ${M.review.retirements ? `<div class="kv"><span>\ud83d\udc4b Retirements</span><b>${M.review.retirements}</b></div>` : ""}
       ${M.review.promoted ? `<div class="kv"><span>\ud83c\udf89 Promoted</span><b>Continental Super League</b></div>` : ""}
       ${M.review.relegated ? `<div class="kv"><span>\ud83d\udcc9 Relegated</span><b>National league</b></div>` : ""}
@@ -688,6 +707,7 @@ function mlSquadScreen() {
       </div>
             <p class="sub" style="margin:4px 0">Form (PES condition): ${mlFormLegend()}</p>
 <p class="sub" style="margin-top:6px">★ XI · ${M.formation} · str <b>${mlTeamStr(0)}</b> · tap a player for TRAIN / SELL. Trainers: 🥉${M.trainers.bronze} 🥈${M.trainers.silver} 🥇${M.trainers.gold}</p>
+<p class="sub">Season log (real): ${(M.squad || []).filter(p => (p.goals || 0) + (p.assists || 0) > 0).sort((a, b) => (b.goals || 0) - (a.goals || 0)).slice(0, 4).map(p => `${p.name} ${p.goals || 0}G ${p.assists || 0}A`).join(" · ") || "no goals logged yet"}</p>
       ${rows}
     </div>
     ${mlNav()}</div>`;
@@ -1782,6 +1802,7 @@ function mlMatchScreen(fx, displayedProbs) {
 
 function mlFinish(fx, r, probs) {
   M.mdLock = null; // committed
+  const mKey0 = (fx.ct ? "ct" + (fx.ctMD != null ? fx.ctMD : M.ct.koRound) : fx.cup ? "cup" + M.cup.round : "md" + M.matchday);
   const meHome = fx.ct ? fx.ctHome : fx.home === M.clubIdx;
   const oppNm = fx.ct ? fx.oppClub.name : M.world.clubs[meHome ? fx.away : fx.home].name;
   M.scouted = M.scouted || []; if (!M.scouted.includes(oppNm)) M.scouted.push(oppNm);
@@ -1907,6 +1928,35 @@ function mlFinish(fx, r, probs) {
     }
     M.matchday++;
   }
+  // ---- #17 MOTM + real per-player attribution (the goals came from the engine; we only name them) ----
+  mlEnsurePlayerStats();
+  const myGoalsNow = meHome ? r.gH : r.gA;
+  const xiPlayers = mlXIPlayers();
+  const att = E.attributeGoals(xiPlayers, myGoalsNow, M.seed + ":attr:" + M.season + ":" + M.matchday + ":" + mKey0);
+  const tally = {};
+  for (const p of xiPlayers) { p.apps = (p.apps || 0) + 1; tally[p.id] = { goals: 0, assists: 0 }; }
+  for (const a of att) {
+    if (tally[a.scorer]) { tally[a.scorer].goals++; (M.squad.find(p => p.id === a.scorer) || {}).goals = ((M.squad.find(p => p.id === a.scorer) || {}).goals || 0) + 1; }
+    if (a.assist && tally[a.assist]) { tally[a.assist].assists++; const q = M.squad.find(p => p.id === a.assist); if (q) q.assists = (q.assists || 0) + 1; }
+  }
+  let motm = null;
+  if (xiPlayers.length) {
+    const cands = xiPlayers.map(p => {
+      const t2 = tally[p.id] || { goals: 0, assists: 0 };
+      return { id: p.id, name: p.name, pos: p.pos, mins: p._sub === "on" ? 30 : 90,
+               rating: 6 + t2.goals * 0.9 + t2.assists * 0.6,
+               score: E.motmScore({ goals: t2.goals, assists: t2.assists, minutes: p._sub === "on" ? 30 : 90 }, { result: res }) };
+    });
+    const best = E.pickMOTM(cands);
+    if (best && best.score >= E.motmThreshold()) {
+      const winner = M.squad.find(p => p.id === best.id);
+      if (winner) winner.motm = (winner.motm || 0) + 1;
+      motm = { season: M.season, md: M.matchday, name: best.name, score: best.score, goals: (tally[best.id] || {}).goals || 0 };
+      M.motmHistory.push(motm);
+      if (M.motmHistory.length > 40) M.motmHistory.shift();
+      mlNews("\ud83c\udf1f MOTM: " + best.name + " (" + best.score.toFixed(2) + " contribution) \u00b7 " + (tally[best.id] || {}).goals + " goal(s).");
+    }
+  }
   let evGp = 0, evWon = [];
   if (!fx.cup) for (const ev2 of mlCurrentEvents()) {
     if (ev2.chk(myG, opG)) { evGp += ev2.gp; evWon.push(ev2.label); }
@@ -1939,6 +1989,7 @@ function mlFinish(fx, r, probs) {
       <div class="kv"><span>Matchday profit</span><b style="color:var(--green)">+${fmtM(prize)}</b></div>
       ${evGp ? `<div class="kv"><span>\ud83c\udfaf Events</span><b style="color:var(--green)">+${fmtM(evGp)}</b></div>` : ""}
       ${drops.length ? `<div class="kv"><span>\ud83c\udf81 Trainers</span><b style="color:var(--gold)">${drops.join(" + ")}</b></div>` : ""}
+      ${(M.motmHistory && M.motmHistory.length && M.motmHistory[M.motmHistory.length - 1].md === M.matchday - 1) ? `<div class="kv"><span>\ud83c\udf1f Man of the match</span><b>${M.motmHistory[M.motmHistory.length - 1].name} <span class="sub">(${M.motmHistory[M.motmHistory.length - 1].score.toFixed(2)})</span></b></div>` : ""}
       <div class="kv"><span>Wages (${fmtM(wages)})</span><b style="color:var(--green)">covered by gate receipts \u2713</b></div>
       <div class="kv"><span>Budget</span><b style="color:var(--gold)">${fmtM(M.budget)}</b></div>
       <p class="sub">Pre-match odds ${probs.home}%/${probs.draw}%/${probs.away}% \u2014 honest engine, upsets included.</p>
@@ -2125,10 +2176,40 @@ function mlSeasonAwards(table, pos, strRank, prize, lcAward, clubIdx) { // hones
   if (row.GF != null) { gf = row.GF; ga = row.GA; } // official table totals when available
   const improved = (M.squad || []).map(p => ({ p, up: p.ovr - (p.ovrStart != null ? p.ovrStart : p.ovr) }))
     .sort((a, b) => b.up - a.up)[0];
+  // ---- #17: the gala. Every award below reads tracked data only (per-player goals/assists/MOTM/apps,
+  //      or the official league table). Nothing is invented; league-wide player stats are not tracked
+  //      by the engine, so club-level awards are labelled as such instead of faked.
+  mlEnsurePlayerStats();
+  const squad = (M.squad || []);
+  const bySeason = squad.slice().sort((a, b) => (E.seasonScore(b) - E.seasonScore(a)) || (b.ovr - a.ovr) || a.name.localeCompare(b.name));
+  const mvp = bySeason[0] || null;
+  const boot = squad.slice().sort((a, b) => (b.goals || 0) - (a.goals || 0) || (b.assists || 0) - (a.assists || 0) || a.name.localeCompare(b.name))[0] || null;
+  const need = { GK: 1, DF: 4, MF: 4, FW: 2 };
+  const grp = (p) => p.pos === "GK" ? "GK" : ["CB", "LB", "RB"].includes(p.pos) ? "DF" : ["DMF", "CMF", "AMF"].includes(p.pos) ? "MF" : "FW";
+  const bestXI = [];
+  for (const g of ["GK", "DF", "MF", "FW"]) {
+    for (const p of bySeason.filter(x => grp(x) === g).slice(0, need[g])) bestXI.push(p);
+  }
+  for (const p of bySeason) { if (bestXI.length >= 11) break; if (!bestXI.includes(p)) bestXI.push(p); }
+  const topPoints = (table || []).slice().sort((a, b) => (b.Pts - a.Pts) || ((b.GF - b.GA) - (a.GF - a.GA)))[0];
+  const manager = topPoints && topPoints.i === clubIdx ? (M.clubName || mlClub().name) : (topPoints ? (M.world.clubs[topPoints.i] || {}).name : null);
+  const motmCount = M.motmHistory.filter(x => x.season === M.season).length;
+  const gala = {
+    mvp: mvp ? { name: mvp.name, pos: mvp.pos, ovr: mvp.ovr, goals: mvp.goals || 0, assists: mvp.assists || 0, motm: mvp.motm || 0, score: E.seasonScore(mvp) } : null,
+    boot: boot && (boot.goals || 0) > 0 ? { name: boot.name, goals: boot.goals || 0, assists: boot.assists || 0 } : null,
+    bestXI: bestXI.map(p => ({ name: p.name, pos: p.pos, ovr: p.ovr, g: p.goals || 0, a: p.assists || 0 })),
+    manager: manager ? { club: manager, points: topPoints.Pts, mine: !!(topPoints && topPoints.i === clubIdx) } : null,
+    motm: motmCount,
+    topMotm: M.motmHistory.filter(x => x.season === M.season).sort((a, b) => b.score - a.score)[0] || null
+  };
+  M.honours.push({ season: M.season, pos, mvp: gala.mvp ? gala.mvp.name : null, boot: gala.boot ? gala.boot.name : null, bootGoals: gala.boot ? gala.boot.goals : 0, motm: motmCount });
+  if (M.honours.length > 30) M.honours.shift();
+  for (const p of squad) { p._seasonEnd = { goals: p.goals || 0, assists: p.assists || 0, motm: p.motm || 0, apps: p.apps || 0 }; } // snapshot for the review panel
   return { season: M.season, pos, strRank, tier: M.tier, pts: row.Pts, w, d, l,
     gf, ga, gd: gf - ga, cs, biggest, target: pos <= strRank ? "met" : "missed",
     prize, lc: lcAward, budget: M.budget,
     improved: (improved && improved.up > 0) ? { name: improved.p.name, up: improved.up, ovr: improved.p.ovr } : null,
+    gala,
     retirements: 0, promoted: false, relegated: false, qualified: false };
 }
 
@@ -2254,7 +2335,8 @@ function mlSeasonEnd() {
   txt += " Board target " + (rev.target === "met" ? "achieved \u2705" : "missed \u26a0\ufe0f") + " (finished #" + pos + ", squad rank #" + strRank + ").";
   M.season++; M.matchday = 0; M.results = [];
   M.cup = { round: 0, alive: true, done: false };
-  for (const p of M.squad) p.ovrStart = p.ovr; // baseline for next season's awards
+  for (const p of M.squad) { p.ovrStart = p.ovr; p.apps = 0; p.goals = 0; p.assists = 0; p.motm = 0; } // new season, clean log
+  M.motmHistory = M.motmHistory.filter(x => x.season !== M.season - 1); // keep only the current season's MOTM list
   mlAutoXI(); mlNews(txt); mlSave();
   render(mlHome);
 }

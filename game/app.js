@@ -524,13 +524,19 @@ function skillsScreen() {
   const learned = S.skills || [];
   const nextBuy = (S.skillSlotsBought || 0) < 3 ? BAL_SKILL_SLOT_COST[S.skillSlotsBought || 0] : null;
   setTimeout(() => {
-    document.querySelectorAll("[data-learn]").forEach(b => b.onclick = () => {
+    document.querySelectorAll("[data-learn]").forEach(b => b.onclick = () => { // #6: start a multi-week plan, not an instant unlock
       const sk = b.dataset.learn;
       if ((S.skills || []).length >= balSkillSlots()) { toast("No free skill slots"); return; }
       if (S.skills.includes(sk)) return;
       if (E.skillLegal && !E.skillLegal(sk, S.pos)) { toast("\u274c Not available for " + S.pos); return; }
-      S.skills.push(sk); save(); toast("\ud83c\udfaf Learned: " + sk); render(skillsScreen);
+      if (S.skillPlan) { toast("\u23f8 Finish or cancel the current plan first (" + S.skillPlan.skill + ")"); return; }
+      balStartTrain(sk);
+      const wks = E.TRAIN.weeksForSkill(sk, balTrainCtx(90));
+      toast("\ud83d\udcc5 Training started: " + sk + " \u00b7 ETA " + wks + " week" + (wks === 1 ? "" : "s") + " at full minutes");
+      render(skillsScreen);
     });
+    const cp = $("#canceltrain");
+    if (cp) cp.onclick = () => { S.skillPlan = null; save(); toast("Training plan cancelled."); render(skillsScreen); };
     const buy = $("#buyslot");
     if (buy) buy.onclick = () => {
       const cost = BAL_SKILL_SLOT_COST[S.skillSlotsBought || 0];
@@ -557,10 +563,32 @@ function skillsScreen() {
       Slot 1: 20 career apps ${S.career.totalApps >= 20 ? "\u2705" : "(" + S.career.totalApps + "/20)"} \u00b7 Slot 2: first trophy/award ${((S.flags.cupsWon || 0) > 0 || S.career.seasons.some(x => x.award)) ? "\u2705" : "\u23f3"} \u00b7 3 more purchasable.</p>
       ${nextBuy ? `<button class="btn secondary" id="buyslot">\ud83d\udd13 UNLOCK SLOT \u00b7 ${nextBuy.gp ? nextBuy.gp + " GP" : nextBuy.lc + " LC"}</button>` : ""}
     </div>
+    ${(() => {
+      const ctx = balTrainCtx(90);
+      if (!S.skillPlan) return `<div class="panel"><h2>\ud83d\udcc5 Training plan</h2>
+        <p class="sub" style="margin:0">No active plan. Pick a skill below \u2014 learning now takes real weeks of work, and the ETA next to each skill is computed from the formula below.</p>
+        ${balTrainFormulaHTML(ctx)}</div>`;
+      const need = E.TRAIN.skillXP(S.skillPlan.skill), done = S.skillPlan.xp || 0;
+      const pct = Math.min(100, Math.round(100 * done / need));
+      const left = E.TRAIN.weeksRemaining(S.skillPlan.skill, done, ctx);
+      return `<div class="panel"><h2>\ud83d\udcc5 Training: ${S.skillPlan.skill}</h2>
+        <div class="mombar" style="margin:6px 0"><div class="momfill" style="width:${pct}%"></div></div>
+        <div class="kv"><span>Plan progress</span><b>${done} / ${need} XP (${pct}%)</b></div>
+        <div class="kv"><span>Weeks remaining</span><b>${S.injury > 0 ? "\u23f8 paused \u2014 injured (" + S.injury + " match" + (S.injury > 1 ? "es" : "") + ")" : left + " week" + (left === 1 ? "" : "s")}</b></div>
+        <div class="kv"><span>XP per week</span><b>${Math.round(E.TRAIN.weeklyXP(balTrainCtx(90)))} at full minutes \u00b7 ${Math.round(E.TRAIN.weeklyXP(balTrainCtx(0)))} training-only</b></div>
+        ${balTrainFormulaHTML(ctx)}
+        <button class="btn secondary" id="canceltrain" style="margin-top:8px">\u2716 CANCEL PLAN</button></div>`;
+    })()}
     <div class="panel"><h2>${S.pos} skill pool</h2>
-      ${pool.map(sk => `<div class="kv"><span><b>${sk}</b>${learned.includes(sk) ? ' <span class="badge gold">LEARNED</span>' : ""}<br>
-        <span class="sub">${effects[sk] || ""}</span></span>
-        ${learned.includes(sk) ? "" : `<button class="btn secondary" data-learn="${sk}" ${learned.length >= slots ? "disabled" : ""}>LEARN</button>`}</div>`).join("")}
+      ${pool.map(sk => {
+        const ctx = balTrainCtx(90);
+        const wks = E.TRAIN.weeksForSkill(sk, ctx);
+        const active = S.skillPlan && S.skillPlan.skill === sk;
+        return `<div class="kv"><span><b>${sk}</b>${learned.includes(sk) ? ' <span class="badge gold">LEARNED</span>' : ""}${active ? ' <span class="badge">IN TRAINING</span>' : ""}<br>
+        <span class="sub">${effects[sk] || ""} \u00b7 <b>${Math.round(E.TRAIN.skillXP(sk) / 60)} weeks</b> base \u00b7 ETA ${wks}w at 90'</span></span>
+        ${learned.includes(sk) || active ? "" : `<button class="btn secondary" data-learn="${sk}" ${learned.length >= slots ? "disabled" : ""}>TRAIN</button>`}</div>`;
+      }).join("")}
+      <p class="sub">Week costs come from each skill's real engine effect: bigger boost = longer plan (chip shots 12w, finishing 7\u20139w, small helpers 3\u20135w).</p>
     </div>
     <button class="btn secondary" id="backhome2">\u2b05 BACK</button></div>`;
 }
@@ -1026,6 +1054,7 @@ function injuredScreen() {
         balCtRecord(ctFx, gH, gA);
         pushNews("\ud83c\udf0d CT night without the injured " + S.name + ": " + gH + "-" + gA + "." + penNote);
         S.injury--;
+        balTrainTick(0); // #6: training week still ticks (plan stays paused while injured)
         S.condition = Math.min(100, S.condition + 30);
         S.trainedToday = false;
         save();
@@ -1061,7 +1090,8 @@ function injuredScreen() {
         S.matchday++;
         balGalaxySim();
       }
-      S.injury--;
+      S.injury--; // #6: a week without you still counts, at the training-only rate
+      balTrainTick(0);
       S.condition = Math.min(100, S.condition + 30); // rest while out
       S.trainedToday = false;
       save();
@@ -2672,6 +2702,7 @@ function matchScreen(fx, displayedProbs) {
 // ---- Post-match: rewards, card events, progression ----
 function finishMatch(fx, result, displayedProbs) {
   S.mdLock = null; // committed: quitting/back can no longer touch this result
+  balTrainTick(result.subbed ? Math.min(90, result.minute || 90) : 90); // #6: one training week per matchday
   const isHome = fx.ct ? fx.ctHome : fx.home === S.clubIdx;
   let my = isHome ? result.gH : result.gA, op = isHome ? result.gA : result.gH;
   if ((fx.cup || (fx.ct && fx.ctStage === "ko")) && my === op) { // #3: decided by the SAME shootout the player watched, or an honest one
@@ -2741,6 +2772,21 @@ function finishMatch(fx, result, displayedProbs) {
   if (result.injuredFor > 0) {
     S.injury = result.injuredFor;
     pushNews(`\ud83e\ude79 Injury blow: ${S.name} out for ${result.injuredFor} match${result.injuredFor > 1 ? "es" : ""}.`);
+  }
+  // ---- #17: Man of the Match from the REAL match log (deterministic score, no re-rolls) ----
+  {
+    const mins = result.subbed ? Math.min(90, result.minute || 90) : 90;
+    const motmStat = { goals: result.pGoals, assists: result.pAssists, saves: result.pSaves || 0,
+      tackles: result.pTackles || 0, keyPasses: result.pKeyPasses || 0, shots: result.pShots || 0,
+      rating: r, minutes: mins, cleanSheet: S.pos === "GK" && op === 0 };
+    result.motmScore = E.motmScore(motmStat, { result: res });
+    result.motm = result.motmScore >= E.motmThreshold();
+    S.myStats.motm = (S.myStats.motm || 0) + (result.motm ? 1 : 0);
+    S.career.motm = (S.career.motm || 0) + (result.motm ? 1 : 0);
+    if (result.motm) {
+      nlGain += 1; S.nl += 1; // milestone: MOTM is worth 1 LC, same ledger as every other LC source
+      pushNews(`\ud83c\udf1f MAN OF THE MATCH: ${S.name} (${result.motmScore.toFixed(2)} contribution) \u00b7 +1 LC.`);
+    }
   }
   S.form = Math.max(-2, Math.min(2, S.form + (r >= 7.5 ? 1 : r < 6 ? -1 : 0)));
   if (S.buff && S.buff.matches > 0) { S.buff.matches--; if (S.buff.matches <= 0) S.buff = null; }
@@ -2828,6 +2874,7 @@ function finishMatch(fx, result, displayedProbs) {
           <div><b style="color:var(--gold)">+${nlGain}</b><span>LEGEND COINS</span></div>
           <div><b>+${Math.max(5, xpGain)}</b><span>XP${spGained ? " (LEVEL UP! +" + spGained + " SP)" : ""}</span></div>
         </div>
+        ${result.motm ? `<div class="cardevent">\ud83c\udf1f MAN OF THE MATCH \u00b7 contribution score ${result.motmScore.toFixed(2)} (threshold ${E.motmThreshold()}) \u00b7 goals ${result.pGoals} \u00b7 assists ${result.pAssists}${result.pSaves ? " \u00b7 saves " + result.pSaves : ""}${result.pTackles ? " \u00b7 tackles " + result.pTackles : ""} \u00b7 rating ${r.toFixed(1)}</div>` : `<p class="sub" style="margin-top:6px">MOTM contribution ${result.motmScore.toFixed(2)} (needs ${E.motmThreshold()}) \u2014 the award went elsewhere this week.</p>`}
         <button class="btn" id="cont">Continue →</button>
       </div>
     </div>`;
@@ -2895,8 +2942,61 @@ function tableScreen() {
   </div>`;
 }
 
+// ---- v1.6 #6: multi-week training plans (published formula lives in Engine.TRAIN) ----
+function balCoachLvl() { return Math.min(3, Math.floor((S.level || 1) / 5)); } // your own experience is the coach
+function balTrainCtx(minutes) { return { age: S.age || 24, coachLvl: balCoachLvl(), minutes: minutes || 0 }; }
+function balTrainFormulaHTML(ctx) {
+  const c = E.TRAIN;
+  return `<p class="sub" style="margin:6px 0 0"><b>Formula (published, unit-tested):</b>
+    <code>XP/week = 60 \u00d7 ageCurve(${ctx.age}) \u00d7 coach(${ctx.coachLvl}) \u00d7 minutes(${Math.round(c.minutesFactor(ctx.minutes) * 100)}%)</code>
+    = <b>${Math.round(c.weeklyXP(ctx))} XP</b> per week \u00b7 ageCurve peaks 18\u201323, holds to 29, decays 30+ \u00b7
+    a skill costs (its real effect size = weeks) \u00d7 60 XP.</p>`;
+}
+function balTrainTick(minutes) { // called once per matchday: advance the active skill plan
+  if (!S.skillPlan) return null;
+  if (S.injury > 0) return "paused"; // injuries pause the plan (by design, no catch-up XP)
+  const ctx = balTrainCtx(minutes);
+  const gain = E.TRAIN.weeklyXP(ctx);
+  S.skillPlan.xp = Math.round((S.skillPlan.xp || 0) + gain);
+  const need = E.TRAIN.skillXP(S.skillPlan.skill);
+  if (S.skillPlan.xp >= need) {
+    const sk = S.skillPlan.skill;
+    if ((S.skills || []).length < balSkillSlots() && !S.skills.includes(sk)) {
+      S.skills.push(sk); S.skillPlan = null; save();
+      pushNews("\ud83c\udfaf TRAINING COMPLETE: " + sk + " learned!");
+      return "learned:" + sk;
+    }
+    S.skillPlan = null; save();
+    return "complete-noslot"; // plan finished while slots were full: honest, nothing gained
+  }
+  save();
+  return "progress";
+}
+function balStartTrain(sk) {
+  if (!E.skillLegal || E.skillLegal(sk, S.pos)) {
+    S.skillPlan = { skill: sk, xp: 0 };
+    save();
+    return true;
+  }
+  return false;
+}
+
 // ---- Training (GP economy + stat points) ----
 function trainScreen() {
+  const plan = E.TRAIN.trainPlan(S.pos, S.stats, S.sp, "auto");
+  const planMax = E.TRAIN.trainPlan(S.pos, S.stats, S.sp, "max");
+  function applyPlan(p) {
+    if (S.sp <= 0) { toast("No stat points — earn XP in matches!"); return; }
+    let spent = 0;
+    for (const k of Object.keys(p.alloc)) {
+      const n2 = p.alloc[k];
+      if (!n2) continue;
+      S.stats[k] = Math.min(99, S.stats[k] + n2); S.sp -= n2; spent += n2;
+    }
+    save();
+    toast(`${p.mode === "max" ? "★ MAX" : "⚡ AUTO"}-trained +${spent} stat points! OVR now ${ovr()}`);
+    render(trainScreen);
+  }
   setTimeout(() => {
     document.querySelectorAll("[data-train]").forEach(b => b.onclick = () => {
       const k = b.dataset.train;
@@ -2905,42 +3005,11 @@ function trainScreen() {
       S.sp--; S.stats[k]++; save(); render(trainScreen);
     });
     const at = $("#autotrain");
-    if (at) at.onclick = () => {
-      if (S.sp <= 0) { toast("No stat points — earn XP in matches!"); return; }
-      const w = E.POSITIONS[S.pos].weights;
-      const sorted = Object.keys(w).sort((a, b) => (w[b] || 0) - (w[a] || 0));
-      const targetKeys = sorted.filter(k => S.stats[k] < 99).slice(0, 3);
-      if (!targetKeys.length) { toast("Key stats maxed (99)!"); return; }
-      let spent = 0;
-      while (S.sp > 0) {
-        let added = false;
-        for (const k of targetKeys) {
-          if (S.sp > 0 && S.stats[k] < 99) {
-            S.stats[k]++; S.sp--; spent++; added = true;
-          }
-        }
-        if (!added) break;
-      }
-      save();
-      toast(`⚡ Auto-trained +${spent} stat points!`);
-      render(trainScreen);
-    };
+    if (at) at.onclick = () => applyPlan(E.TRAIN.trainPlan(S.pos, S.stats, S.sp, "auto"));
     const mt = $("#maxtrain");
-    if (mt) mt.onclick = () => {
-      if (S.sp <= 0) { toast("No stat points — earn XP in matches!"); return; }
-      const w = E.POSITIONS[S.pos].weights;
-      const sorted = Object.keys(w).sort((a, b) => (w[b] || 0) - (w[a] || 0));
-      let spent = 0;
-      for (const k of sorted) {
-        while (S.sp > 0 && S.stats[k] < 99) {
-          S.stats[k]++; S.sp--; spent++;
-        }
-        if (S.sp <= 0) break;
-      }
-      save();
-      toast(`★ Max-trained +${spent} stat points! OVR now ${ovr()}`);
-      render(trainScreen);
-    };
+    if (mt) mt.onclick = () => applyPlan(E.TRAIN.trainPlan(S.pos, S.stats, S.sp, "max"));
+    const cp = $("#canceltrain");
+    if (cp) cp.onclick = () => { S.skillPlan = null; save(); toast("Training plan cancelled."); render(skillsScreen); };
     const drill = $("#drill");
     if (drill) drill.onclick = () => {
       if (S.trainedToday) return;
@@ -2965,6 +3034,10 @@ function trainScreen() {
       <p class="sub" style="margin-bottom:6px">OVR weights stats by position \u2014 train what your role rewards. ${E.POSITIONS[S.pos].label}s live on ${(() => { const w = E.POSITIONS[S.pos].weights; return Object.entries(w).sort((x,y)=>y[1]-x[1]).slice(0,2).map(e=>e[0]).join(" + "); })()}.</p>
       <div class="kv"><span>Level ${S.level}</span><b>${S.xp}/${S.level * 100} XP</b></div>
       <div class="kv"><span>Stat points</span><b style="color:var(--gold)">${S.sp}</b></div>
+      <div class="kv"><span>OVR now</span><b>${ovr()}</b></div>
+      <p class="sub" style="margin:4px 0">Two ways to spend the same budget \u2014 both previews are computed by the engine planner, not marketing:</p>
+      <div class="kv"><span><b>\u26a1 AUTO</b><br><span class="sub">balanced spread across the ${S.pos} profile (${Object.keys(plan.alloc).filter(k => plan.alloc[k]).map(k => k + " +" + plan.alloc[k]).join(", ") || "nothing to spend"})</span></span><b>OVR ${plan.ovrBefore} \u2192 ${plan.ovrAfter}</b></div>
+      <div class="kv"><span><b>\u2605 MAX</b><br><span class="sub">archetype push: ${Object.keys(planMax.alloc).filter(k => planMax.alloc[k]).map(k => k + " +" + planMax.alloc[k]).join(", ") || "nothing to spend"} \u00b7 support stats soft-capped at ${planMax.supportCap}</span></span><b>OVR ${planMax.ovrBefore} \u2192 ${planMax.ovrAfter}</b></div>
       <div class="optrow" style="margin:8px 0;gap:8px">
         <button class="btn secondary" id="autotrain" ${S.sp <= 0 ? "disabled" : ""} style="flex:1;padding:8px">⚡ AUTO-TRAIN</button>
         <button class="btn gold" id="maxtrain" ${S.sp <= 0 ? "disabled" : ""} style="flex:1;padding:8px">★ MAX-TRAIN</button>
@@ -3242,6 +3315,7 @@ function careerScreen() {
       <div class="kv"><span>Finished</span><b>#${s.pos}</b></div>
       <div class="kv"><span>Goals / Assists</span><b>${s.goals} / ${s.assists}</b></div>
       <div class="kv"><span>Avg rating</span><b>${s.avg}</b></div>
+      ${s.motm ? `<div class="kv"><span>\ud83c\udf1f Man of the Match</span><b>${s.motm}\u00d7</b></div>` : ""}
       ${s.award ? `<div class="cardevent">${s.award}</div>` : ""}
     </div>`).join("")}
     <div class="panel">
@@ -3335,6 +3409,7 @@ function startNewSeason() {
   S.career.seasons.push({
     n: S.season, club: myClub().name, pos: myPos,
     goals: S.myStats.goals, assists: S.myStats.assists, avg: avg.toFixed(2),
+    motm: S.myStats.motm || 0,
     award: award || (champion ? "\ud83c\udfc6 LEAGUE CHAMPION" : wonBoot ? "\ud83d\udc5f GOLDEN BOOT" : null)
   });
   // transfer offer: strong season in tier 0 → move to Euro league
